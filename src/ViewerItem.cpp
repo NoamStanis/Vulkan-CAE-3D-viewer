@@ -1,5 +1,6 @@
 #include "ViewerItem.h"
 #include "VulkanRenderer.h"
+#include "Mesh.h"
 
 #include <QQuickWindow>
 #include <QSGSimpleTextureNode>
@@ -21,9 +22,24 @@ ViewerItem::ViewerItem(QQuickItem *parent)
 {
     setFlag(ItemHasContents, true);
 
-    // Frame the camera around the unit cube (radius = sqrt(3)/2 ≈ 0.87). This is
-    // a placeholder until the loaded mesh's bounds drive framing in a later step.
-    m_camera.frame(QVector3D(0, 0, 0), 0.87f);
+    // Load the model on the main thread (file I/O + bounds), falling back to a
+    // unit cube if the asset is missing or unreadable. The prepared MeshData is
+    // handed to the renderer when the scene graph initialises.
+    try {
+        m_mesh = loadObj(ASSET_DIR "suzanne.obj");
+    } catch (const std::exception &e) {
+        qWarning() << "ViewerItem: OBJ load failed, using fallback cube:" << e.what();
+        m_mesh = makeCube();
+    }
+
+    // Frame the camera to the loaded mesh's bounds so it fits on load, and size
+    // the axis gizmo to roughly the model's extent.
+    const Bounds b = m_mesh.bounds();
+    float c[3];
+    b.center(c);
+    const float radius = b.radius();
+    m_camera.frame(QVector3D(c[0], c[1], c[2]), radius > 0.0f ? radius : 1.0f);
+    m_axisLength = (radius > 0.0f ? radius : 1.0f) * 1.25f;
 
     // These signals are emitted on the render thread, so use DirectConnection.
     connect(this, &QQuickItem::windowChanged, this, [this](QQuickWindow *w) {
@@ -83,7 +99,7 @@ void ViewerItem::handleSceneGraphInitialized()
         m_renderer = std::make_unique<VulkanRenderer>(
             *vkInstance, *vkPhysDevice, *vkDevice,
             static_cast<uint32_t>(*queueFamilyIdx), *vkQueue);
-        m_renderer->init(pixelSize);
+        m_renderer->init(pixelSize, m_mesh, m_axisLength);
     } catch (const std::exception &e) {
         qWarning() << "ViewerItem: renderer init FAILED:" << e.what();
         m_renderer.reset();

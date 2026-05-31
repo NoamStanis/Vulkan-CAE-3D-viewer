@@ -9,6 +9,7 @@ set(CMAKE_AUTOMOC ON)
 
 find_package(Qt6 REQUIRED COMPONENTS Core Gui Quick)
 find_package(Vulkan REQUIRED)
+find_package(tinyobjloader REQUIRED)
 
 # Locate glslc for shader compilation
 find_program(GLSLC glslc HINTS ENV VULKAN_SDK PATH_SUFFIXES bin REQUIRED)
@@ -21,6 +22,8 @@ file(MAKE_DIRECTORY ${SHADER_BINARY_DIR})
 set(SHADER_SOURCES
     ${SHADER_SOURCE_DIR}/mesh.vert
     ${SHADER_SOURCE_DIR}/mesh.frag
+    ${SHADER_SOURCE_DIR}/axes.vert
+    ${SHADER_SOURCE_DIR}/axes.frag
 )
 
 set(SHADER_BINARIES "")
@@ -69,9 +72,11 @@ target_include_directories(VulkanCAEViewerApp PRIVATE
     ${Vulkan_INCLUDE_DIRS}
 )
 
-# Pass the shader directory to the app so it can load .spv files at runtime
+# Pass the shader and asset directories to the app so it can load .spv files and
+# meshes at runtime.
 target_compile_definitions(VulkanCAEViewerApp PRIVATE
     SHADER_DIR="${SHADER_BINARY_DIR}/"
+    ASSET_DIR="${CMAKE_CURRENT_SOURCE_DIR}/assets/"
 )
 
 target_link_libraries(VulkanCAEViewerApp PRIVATE
@@ -79,4 +84,5 @@ target_link_libraries(VulkanCAEViewerApp PRIVATE
     Qt6::Gui
     Qt6::Quick
     Vulkan::Vulkan
+    tinyobjloader::tinyobjloader
 )

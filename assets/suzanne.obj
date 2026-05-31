@@ -1,0 +1,19 @@
+# Square pyramid — an intentionally asymmetric test model so orientation reads
+# clearly against the XYZ gizmo. Apex points +Y; base sits on the XZ plane.
+# (Named suzanne.obj as the conventional placeholder; swap in any OBJ you like.)
+
+v -0.5 0.0 -0.5
+v  0.5 0.0 -0.5
+v  0.5 0.0  0.5
+v -0.5 0.0  0.5
+v  0.0 0.8  0.0
+
+# Base (two triangles, facing -Y, CCW from below)
+f 1 3 2
+f 1 4 3
+
+# Sides (CCW from outside)
+f 1 2 5
+f 2 3 5
+f 3 4 5
+f 4 1 5

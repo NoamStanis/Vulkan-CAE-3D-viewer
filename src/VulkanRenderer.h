@@ -40,7 +40,9 @@ public:
     VulkanRenderer(const VulkanRenderer &) = delete;
     VulkanRenderer &operator=(const VulkanRenderer &) = delete;
 
-    void init(const QSize &size);
+    // `mesh` is uploaded as the object to render; `axisLength` sizes the XYZ
+    // orientation gizmo (typically the mesh's bounding radius).
+    void init(const QSize &size, const MeshData &mesh, float axisLength);
     void resize(const QSize &size);
     void render();
 
@@ -67,6 +69,8 @@ private:
     void createMeshBuffers(const MeshData &mesh);
     void createUniformBuffer();
     void createDescriptors();
+    void createAxesPipeline();
+    void createAxesBuffer(float length);
 
     uint32_t findMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties) const;
     VkShaderModule loadShaderModule(const QString &spvPath) const;
@@ -125,6 +129,13 @@ private:
     VkBuffer       m_indexBuffer        = VK_NULL_HANDLE;
     VkDeviceMemory m_indexBufferMemory  = VK_NULL_HANDLE;
     uint32_t       m_indexCount         = 0;
+
+    // XYZ axis gizmo: a separate line-topology pipeline over a small
+    // position+color vertex buffer, reusing the shared MVP descriptor.
+    VkPipeline     m_axesPipeline       = VK_NULL_HANDLE;
+    VkBuffer       m_axesBuffer         = VK_NULL_HANDLE;
+    VkDeviceMemory m_axesBufferMemory   = VK_NULL_HANDLE;
+    uint32_t       m_axesVertexCount    = 0;
 
     // Uniform buffer (MVP), host-visible and persistently mapped.
     VkBuffer              m_uniformBuffer       = VK_NULL_HANDLE;

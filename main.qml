@@ -15,7 +15,9 @@ Window {
         id: viewer
         anchors.fill: parent
 
-        // Drag with the left mouse button to orbit the camera.
+        // Drag to orbit (left button); scroll wheel / trackpad to zoom. Handling
+        // the wheel inside the MouseArea avoids a separate pointer handler
+        // competing with it for the same events.
         MouseArea {
             id: dragArea
             anchors.fill: parent
@@ -32,13 +34,10 @@ Window {
                 lastX = mouse.x;
                 lastY = mouse.y;
             }
-        }
-
-        // Scroll wheel / trackpad to zoom.
-        WheelHandler {
-            target: null  // handle the event ourselves, don't transform an item
-            onWheel: (event) => {
-                viewer.zoom(event.angleDelta.y / 120.0);
+            onWheel: (wheel) => {
+                // angleDelta is in eighths of a degree; 120 == one notch. Trackpads
+                // report smaller continuous deltas, which scale naturally.
+                viewer.zoom(wheel.angleDelta.y / 120.0);
             }
         }
     }

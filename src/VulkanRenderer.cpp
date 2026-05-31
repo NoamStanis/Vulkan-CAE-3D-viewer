@@ -39,6 +39,12 @@ VulkanRenderer::~VulkanRenderer()
         vkDestroyFence(m_device, m_fence, nullptr);
     if (m_commandPool != VK_NULL_HANDLE)
         vkDestroyCommandPool(m_device, m_commandPool, nullptr);
+    if (m_axesBuffer != VK_NULL_HANDLE)
+        vkDestroyBuffer(m_device, m_axesBuffer, nullptr);
+    if (m_axesBufferMemory != VK_NULL_HANDLE)
+        vkFreeMemory(m_device, m_axesBufferMemory, nullptr);
+    if (m_axesPipeline != VK_NULL_HANDLE)
+        vkDestroyPipeline(m_device, m_axesPipeline, nullptr);
     if (m_pipeline != VK_NULL_HANDLE)
         vkDestroyPipeline(m_device, m_pipeline, nullptr);
     if (m_pipelineLayout != VK_NULL_HANDLE)
@@ -74,7 +80,7 @@ VulkanRenderer::~VulkanRenderer()
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-void VulkanRenderer::init(const QSize &size)
+void VulkanRenderer::init(const QSize &size, const MeshData &mesh, float axisLength)
 {
     m_size = size;
 
@@ -85,11 +91,12 @@ void VulkanRenderer::init(const QSize &size)
     createDepthResources();
     createUniformBuffer();   // descriptor set layout used by the pipeline layout
     createPipeline();
+    createAxesPipeline();    // shares the pipeline layout / MVP descriptor
     createDescriptors();     // pool + set, bound to the uniform buffer
     createFramebuffer();
 
-    // Step 2: hardcoded cube. Replaced by a loaded mesh in a later step.
-    createMeshBuffers(makeCube());
+    createMeshBuffers(mesh);
+    createAxesBuffer(axisLength > 0.0f ? axisLength : 1.0f);
 }
 
 void VulkanRenderer::resize(const QSize &size)
@@ -177,6 +184,17 @@ void VulkanRenderer::render()
     vkCmdBindIndexBuffer(m_commandBuffer, m_indexBuffer, 0, VK_INDEX_TYPE_UINT32);
 
     vkCmdDrawIndexed(m_commandBuffer, m_indexCount, 1, 0, 0, 0);
+
+    // ── XYZ axis gizmo ────────────────────────────────────────────────────────
+    // Same MVP descriptor (already bound); just switch pipeline + vertex buffer.
+    // Depth-tested against the mesh so axes are occluded where they pass behind.
+    if (m_axesVertexCount > 0) {
+        vkCmdBindPipeline(m_commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_axesPipeline);
+        VkBuffer     axesBuffers[] = {m_axesBuffer};
+        VkDeviceSize axesOffsets[] = {0};
+        vkCmdBindVertexBuffers(m_commandBuffer, 0, 1, axesBuffers, axesOffsets);
+        vkCmdDraw(m_commandBuffer, m_axesVertexCount, 1, 0, 0);
+    }
 
     vkCmdEndRenderPass(m_commandBuffer);
 
@@ -746,6 +764,140 @@ void VulkanRenderer::createPipeline()
     // Shader modules are no longer needed once the pipeline is compiled.
     vkDestroyShaderModule(m_device, vertModule, nullptr);
     vkDestroyShaderModule(m_device, fragModule, nullptr);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Axis gizmo pipeline + buffer
+//
+// Per-vertex (position, color) interleaved as 6 floats, drawn as a line list.
+// No culling, no lighting. Reuses m_pipelineLayout so the same MVP descriptor
+// applies — the axes live in the same object space as the mesh.
+// ─────────────────────────────────────────────────────────────────────────────
+namespace {
+struct AxisVertex { float pos[3]; float color[3]; };
+}
+
+void VulkanRenderer::createAxesPipeline()
+{
+    VkShaderModule vertModule = loadShaderModule(QStringLiteral(SHADER_DIR "axes.vert.spv"));
+    VkShaderModule fragModule = loadShaderModule(QStringLiteral(SHADER_DIR "axes.frag.spv"));
+
+    std::array<VkPipelineShaderStageCreateInfo, 2> stages{};
+    stages[0].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    stages[0].stage  = VK_SHADER_STAGE_VERTEX_BIT;
+    stages[0].module = vertModule;
+    stages[0].pName  = "main";
+    stages[1].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    stages[1].stage  = VK_SHADER_STAGE_FRAGMENT_BIT;
+    stages[1].module = fragModule;
+    stages[1].pName  = "main";
+
+    VkVertexInputBindingDescription binding{};
+    binding.binding   = 0;
+    binding.stride    = sizeof(AxisVertex);
+    binding.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+
+    std::array<VkVertexInputAttributeDescription, 2> attrs{};
+    attrs[0].location = 0;
+    attrs[0].binding  = 0;
+    attrs[0].format   = VK_FORMAT_R32G32B32_SFLOAT;
+    attrs[0].offset   = offsetof(AxisVertex, pos);
+    attrs[1].location = 1;
+    attrs[1].binding  = 0;
+    attrs[1].format   = VK_FORMAT_R32G32B32_SFLOAT;
+    attrs[1].offset   = offsetof(AxisVertex, color);
+
+    VkPipelineVertexInputStateCreateInfo vertexInput{};
+    vertexInput.sType                           = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+    vertexInput.vertexBindingDescriptionCount   = 1;
+    vertexInput.pVertexBindingDescriptions      = &binding;
+    vertexInput.vertexAttributeDescriptionCount = static_cast<uint32_t>(attrs.size());
+    vertexInput.pVertexAttributeDescriptions    = attrs.data();
+
+    VkPipelineInputAssemblyStateCreateInfo inputAssembly{};
+    inputAssembly.sType    = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+    inputAssembly.topology = VK_PRIMITIVE_TOPOLOGY_LINE_LIST;
+
+    VkPipelineViewportStateCreateInfo viewportState{};
+    viewportState.sType         = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+    viewportState.viewportCount = 1;
+    viewportState.scissorCount  = 1;
+
+    VkPipelineRasterizationStateCreateInfo rasterizer{};
+    rasterizer.sType       = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+    rasterizer.polygonMode = VK_POLYGON_MODE_FILL;
+    rasterizer.cullMode    = VK_CULL_MODE_NONE;
+    rasterizer.frontFace   = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+    rasterizer.lineWidth   = 1.0f;
+
+    VkPipelineMultisampleStateCreateInfo multisampling{};
+    multisampling.sType                = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+    multisampling.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+
+    // Depth-tested so axes are occluded behind the mesh, but they don't need to
+    // write depth themselves.
+    VkPipelineDepthStencilStateCreateInfo depthStencil{};
+    depthStencil.sType            = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+    depthStencil.depthTestEnable  = VK_TRUE;
+    depthStencil.depthWriteEnable = VK_TRUE;
+    depthStencil.depthCompareOp   = VK_COMPARE_OP_LESS;
+
+    VkPipelineColorBlendAttachmentState blendAttachment{};
+    blendAttachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT
+                                   | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+    blendAttachment.blendEnable    = VK_FALSE;
+
+    VkPipelineColorBlendStateCreateInfo colorBlend{};
+    colorBlend.sType           = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+    colorBlend.attachmentCount = 1;
+    colorBlend.pAttachments    = &blendAttachment;
+
+    std::array<VkDynamicState, 2> dynamicStates = {
+        VK_DYNAMIC_STATE_VIEWPORT,
+        VK_DYNAMIC_STATE_SCISSOR
+    };
+    VkPipelineDynamicStateCreateInfo dynamicState{};
+    dynamicState.sType             = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+    dynamicState.dynamicStateCount = static_cast<uint32_t>(dynamicStates.size());
+    dynamicState.pDynamicStates    = dynamicStates.data();
+
+    VkGraphicsPipelineCreateInfo pipelineInfo{};
+    pipelineInfo.sType               = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+    pipelineInfo.stageCount          = static_cast<uint32_t>(stages.size());
+    pipelineInfo.pStages             = stages.data();
+    pipelineInfo.pVertexInputState   = &vertexInput;
+    pipelineInfo.pInputAssemblyState = &inputAssembly;
+    pipelineInfo.pViewportState      = &viewportState;
+    pipelineInfo.pRasterizationState = &rasterizer;
+    pipelineInfo.pMultisampleState   = &multisampling;
+    pipelineInfo.pDepthStencilState  = &depthStencil;
+    pipelineInfo.pColorBlendState    = &colorBlend;
+    pipelineInfo.pDynamicState       = &dynamicState;
+    pipelineInfo.layout              = m_pipelineLayout;
+    pipelineInfo.renderPass          = m_renderPass;
+    pipelineInfo.subpass             = 0;
+
+    VK_CHECK(vkCreateGraphicsPipelines(m_device, VK_NULL_HANDLE, 1,
+                                       &pipelineInfo, nullptr, &m_axesPipeline),
+             "vkCreateGraphicsPipelines (axes)");
+
+    vkDestroyShaderModule(m_device, vertModule, nullptr);
+    vkDestroyShaderModule(m_device, fragModule, nullptr);
+}
+
+void VulkanRenderer::createAxesBuffer(float length)
+{
+    // Three lines from the origin: +X red, +Y green, +Z blue.
+    const AxisVertex verts[] = {
+        {{0, 0, 0}, {1, 0, 0}}, {{length, 0, 0}, {1, 0, 0}},
+        {{0, 0, 0}, {0, 1, 0}}, {{0, length, 0}, {0, 1, 0}},
+        {{0, 0, 0}, {0, 0, 1}}, {{0, 0, length}, {0, 0, 1}},
+    };
+    m_axesVertexCount = static_cast<uint32_t>(sizeof(verts) / sizeof(verts[0]));
+
+    uploadToDeviceLocalBuffer(verts, sizeof(verts),
+                              VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+                              m_axesBuffer, m_axesBufferMemory);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

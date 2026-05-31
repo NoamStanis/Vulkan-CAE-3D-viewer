@@ -3,6 +3,7 @@
 #include <vulkan/vulkan.h>
 #include <array>
 #include <cstdint>
+#include <string>
 #include <vector>
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -50,13 +51,47 @@ struct Vertex
     }
 };
 
+// Axis-aligned bounding box of a mesh, plus convenience center/radius used to
+// frame the camera so any loaded model fits the view on load.
+struct Bounds
+{
+    float min[3]{0, 0, 0};
+    float max[3]{0, 0, 0};
+
+    void center(float out[3]) const
+    {
+        for (int i = 0; i < 3; ++i) out[i] = 0.5f * (min[i] + max[i]);
+    }
+    // Radius of the bounding sphere (half the diagonal of the box).
+    float radius() const
+    {
+        float c[3];
+        center(c);
+        float r2 = 0.0f;
+        for (int i = 0; i < 3; ++i) {
+            const float d = max[i] - c[i];
+            r2 += d * d;
+        }
+        float r = 0.0f;
+        // simple sqrt without pulling <cmath> into the header
+        if (r2 > 0.0f) { r = r2; for (int k = 0; k < 20; ++k) r = 0.5f * (r + r2 / r); }
+        return r;
+    }
+};
+
 struct MeshData
 {
     std::vector<Vertex>   vertices;
     std::vector<uint32_t> indices;
+
+    Bounds bounds() const;
 };
 
 // A unit cube centred at the origin, with per-face normals (24 vertices so each
-// face gets correct flat normals). Used as the step-2 hardcoded mesh before the
-// OBJ loader lands.
+// face gets correct flat normals). Used as a fallback when no mesh is loaded.
 MeshData makeCube();
+
+// Load a triangulated mesh from a Wavefront OBJ file. Faces are triangulated
+// and per-vertex normals are taken from the file, or generated from face
+// geometry when the OBJ has none. Throws std::runtime_error on failure.
+MeshData loadObj(const std::string &path);

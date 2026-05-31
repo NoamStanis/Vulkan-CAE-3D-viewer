@@ -1,6 +1,7 @@
 #pragma once
 
 #include "TrackballCamera.h"
+#include "Mesh.h"
 
 #include <QQuickItem>
 #include <QSGTexture>
@@ -59,4 +60,9 @@ private:
     // Camera lives on the main thread; only the resulting matrix crosses to the
     // render thread, inside updatePaintNode (main thread blocked there).
     TrackballCamera m_camera;
+
+    // Mesh + axis length are prepared on the main thread (file I/O, bounds) and
+    // handed to the renderer when the scene graph initialises.
+    MeshData m_mesh;
+    float    m_axisLength = 1.0f;
 };

@@ -10,6 +10,7 @@ class VulkanCAEViewerConan(ConanFile):
 
     def requirements(self):
         self.requires("qt/6.8.3")
+        self.requires("tinyobjloader/2.0.0-rc10")  # header+lib OBJ mesh loader
         if self.settings.os == "Macos":
             # On macOS, Qt 6.8.3 hard-pins moltenvk/1.2.2 (the Vulkan-on-Metal
             # driver), which only compiles against glslang/1.3.239.0. Keep the

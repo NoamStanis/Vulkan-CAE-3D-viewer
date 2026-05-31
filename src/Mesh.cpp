@@ -1,5 +1,13 @@
 #include "Mesh.h"
 
+#define TINYOBJLOADER_IMPLEMENTATION
+#include <tiny_obj_loader.h>
+
+#include <algorithm>
+#include <cmath>
+#include <stdexcept>
+#include <unordered_map>
+
 // ─────────────────────────────────────────────────────────────────────────────
 // makeCube
 //
@@ -48,6 +56,126 @@ MeshData makeCube()
     // -Z face
     addFace((float[]){p, m, m}, (float[]){m, m, m}, (float[]){m, p, m}, (float[]){p, p, m},
             (float[]){0, 0, -1});
+
+    return mesh;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+Bounds MeshData::bounds() const
+{
+    Bounds b;
+    if (vertices.empty())
+        return b;
+
+    for (int i = 0; i < 3; ++i)
+        b.min[i] = b.max[i] = vertices[0].position[i];
+
+    for (const Vertex &v : vertices) {
+        for (int i = 0; i < 3; ++i) {
+            b.min[i] = std::min(b.min[i], v.position[i]);
+            b.max[i] = std::max(b.max[i], v.position[i]);
+        }
+    }
+    return b;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// loadObj
+//
+// Triangulates faces via tinyobjloader and de-duplicates (position, normal)
+// pairs into a unique vertex list with an index buffer. If the OBJ supplies no
+// normals, flat per-face normals are generated from the triangle geometry.
+// ─────────────────────────────────────────────────────────────────────────────
+MeshData loadObj(const std::string &path)
+{
+    tinyobj::ObjReaderConfig config;
+    config.triangulate = true;
+
+    tinyobj::ObjReader reader;
+    if (!reader.ParseFromFile(path, config)) {
+        std::string err = "loadObj: failed to parse '" + path + "'";
+        if (!reader.Error().empty())
+            err += ": " + reader.Error();
+        throw std::runtime_error(err);
+    }
+
+    const tinyobj::attrib_t      &attrib = reader.GetAttrib();
+    const std::vector<tinyobj::shape_t> &shapes = reader.GetShapes();
+
+    MeshData mesh;
+
+    // Key a unique vertex by its (position-index, normal-index) pair so shared
+    // verts collapse but hard normal edges stay split.
+    struct Key { int p; int n; };
+    struct KeyHash {
+        size_t operator()(const Key &k) const {
+            return std::hash<long long>()((static_cast<long long>(k.p) << 32) ^ (k.n & 0xffffffffLL));
+        }
+    };
+    struct KeyEq {
+        bool operator()(const Key &a, const Key &b) const { return a.p == b.p && a.n == b.n; }
+    };
+    std::unordered_map<Key, uint32_t, KeyHash, KeyEq> unique;
+
+    for (const tinyobj::shape_t &shape : shapes) {
+        const auto &idx = shape.mesh.indices;
+        for (size_t f = 0; f + 2 < idx.size(); f += 3) {
+            // Gather the three corners; compute a geometric normal as fallback.
+            tinyobj::index_t tri[3] = {idx[f + 0], idx[f + 1], idx[f + 2]};
+
+            float facePos[3][3];
+            for (int c = 0; c < 3; ++c) {
+                const int vi = tri[c].vertex_index;
+                facePos[c][0] = attrib.vertices[3 * vi + 0];
+                facePos[c][1] = attrib.vertices[3 * vi + 1];
+                facePos[c][2] = attrib.vertices[3 * vi + 2];
+            }
+            // Flat normal from edge cross product (used when the OBJ lacks normals).
+            float e1[3], e2[3], fn[3];
+            for (int i = 0; i < 3; ++i) {
+                e1[i] = facePos[1][i] - facePos[0][i];
+                e2[i] = facePos[2][i] - facePos[0][i];
+            }
+            fn[0] = e1[1] * e2[2] - e1[2] * e2[1];
+            fn[1] = e1[2] * e2[0] - e1[0] * e2[2];
+            fn[2] = e1[0] * e2[1] - e1[1] * e2[0];
+            float len = std::sqrt(fn[0] * fn[0] + fn[1] * fn[1] + fn[2] * fn[2]);
+            if (len > 0.0f) { fn[0] /= len; fn[1] /= len; fn[2] /= len; }
+
+            for (int c = 0; c < 3; ++c) {
+                const Key key{tri[c].vertex_index, tri[c].normal_index};
+                auto it = unique.find(key);
+                if (it != unique.end()) {
+                    mesh.indices.push_back(it->second);
+                    continue;
+                }
+
+                Vertex v{};
+                v.position[0] = facePos[c][0];
+                v.position[1] = facePos[c][1];
+                v.position[2] = facePos[c][2];
+
+                if (tri[c].normal_index >= 0 && !attrib.normals.empty()) {
+                    const int ni = tri[c].normal_index;
+                    v.normal[0] = attrib.normals[3 * ni + 0];
+                    v.normal[1] = attrib.normals[3 * ni + 1];
+                    v.normal[2] = attrib.normals[3 * ni + 2];
+                } else {
+                    v.normal[0] = fn[0];
+                    v.normal[1] = fn[1];
+                    v.normal[2] = fn[2];
+                }
+
+                const uint32_t newIndex = static_cast<uint32_t>(mesh.vertices.size());
+                mesh.vertices.push_back(v);
+                unique.emplace(key, newIndex);
+                mesh.indices.push_back(newIndex);
+            }
+        }
+    }
+
+    if (mesh.vertices.empty())
+        throw std::runtime_error("loadObj: '" + path + "' contained no triangles");
 
     return mesh;
 }
