@@ -55,7 +55,7 @@ void ViewerItem::handleSceneGraphInitialized()
 
     // Borrow Qt's Vulkan handles. Qt owns these — do NOT destroy them.
     auto *vkInstance    = reinterpret_cast<VkInstance *>(
-        ri->getResource(w, QSGRendererInterface::InstanceResource));
+        ri->getResource(w, QSGRendererInterface::VulkanInstanceResource));
     auto *vkPhysDevice  = reinterpret_cast<VkPhysicalDevice *>(
         ri->getResource(w, QSGRendererInterface::PhysicalDeviceResource));
     auto *vkDevice      = reinterpret_cast<VkDevice *>(
@@ -64,7 +64,7 @@ void ViewerItem::handleSceneGraphInitialized()
         ri->getResource(w, QSGRendererInterface::CommandQueueResource));
     // Qt 6 exposes this as int*. Cast to uint32_t for Vulkan APIs.
     auto *queueFamilyIdx = reinterpret_cast<int *>(
-        ri->getResource(w, QSGRendererInterface::CommandQueueFamilyIndexResource));
+        ri->getResource(w, QSGRendererInterface::GraphicsQueueFamilyIndexResource));
 
     if (!vkInstance || !vkPhysDevice || !vkDevice || !vkQueue || !queueFamilyIdx) {
         qWarning() << "ViewerItem: failed to retrieve Vulkan handles from Qt";
@@ -75,10 +75,15 @@ void ViewerItem::handleSceneGraphInitialized()
     if (!pixelSize.isValid())
         pixelSize = QSize(1, 1);
 
-    m_renderer = std::make_unique<VulkanRenderer>(
-        *vkInstance, *vkPhysDevice, *vkDevice,
-        static_cast<uint32_t>(*queueFamilyIdx), *vkQueue);
-    m_renderer->init(pixelSize);
+    try {
+        m_renderer = std::make_unique<VulkanRenderer>(
+            *vkInstance, *vkPhysDevice, *vkDevice,
+            static_cast<uint32_t>(*queueFamilyIdx), *vkQueue);
+        m_renderer->init(pixelSize);
+    } catch (const std::exception &e) {
+        qWarning() << "ViewerItem: renderer init FAILED:" << e.what();
+        m_renderer.reset();
+    }
 }
 
 void ViewerItem::handleSceneGraphInvalidated()
@@ -103,7 +108,13 @@ QSGNode *ViewerItem::updatePaintNode(QSGNode *oldNode, UpdatePaintNodeData *)
     }
 
     // Render our Vulkan scene into the offscreen VkImage.
-    m_renderer->render();
+    try {
+        m_renderer->render();
+    } catch (const std::exception &e) {
+        qWarning() << "ViewerItem: render() FAILED:" << e.what();
+        delete oldNode;
+        return nullptr;
+    }
 
     // ── Wrap the VkImage as a QSGTexture ─────────────────────────────────────
     // QNativeInterface::QSGVulkanTexture::fromNative is the Qt 6 API for this.
@@ -112,11 +123,10 @@ QSGNode *ViewerItem::updatePaintNode(QSGNode *oldNode, UpdatePaintNodeData *)
     QSize   sz      = m_renderer->size();
 
     // fromNative wraps without taking ownership of the VkImage.
-    // fromNative signature: (VkImage, int nativeLayout, QQuickWindow*, QSize, options)
-    // nativeLayout is VkImageLayout cast to int.
+    // fromNative signature: (VkImage, VkImageLayout, QQuickWindow*, QSize, options)
     QSGTexture *texture = QNativeInterface::QSGVulkanTexture::fromNative(
         vkImage,
-        static_cast<int>(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL),
+        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
         window(),
         sz);
 
@@ -131,14 +141,15 @@ QSGNode *ViewerItem::updatePaintNode(QSGNode *oldNode, UpdatePaintNodeData *)
     if (!node) {
         node = new QSGSimpleTextureNode();
         node->setFiltering(QSGTexture::Linear);
-    } else {
-        // Delete the old QSGTexture — each call to fromNative allocates a new wrapper.
-        delete node->texture();
+        node->setOwnsTexture(true); // node owns the wrapper; the VkImage stays ours
     }
 
+    // Because the node owns its texture, setTexture() deletes the previous
+    // wrapper for us. Each fromNative() call above allocates a fresh wrapper,
+    // so we must NOT delete it manually here — doing so double-frees it and
+    // corrupts the heap (crash inside setTexture on the next frame).
     node->setTexture(texture);
     node->setRect(boundingRect());
-    node->setOwnsTexture(true); // node will delete the wrapper; the VkImage is ours
 
     // Ask Qt to call updatePaintNode again next frame so we render continuously.
     // Remove this for a static scene; call update() only when something changes.

@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python3 -c ' *)",
+      "Bash(cd \"/Users/noam/Documents/Vulkan CAE 3D viewer\"; echo \"=== are validation layers available via conan moltenvk/vulkan-loader? ===\"; find ~/.conan2/p -ipath \"*explicit_layer*\" -name \"VkLayer_khronos_validation.json\" 2>/dev/null | head; echo \"=== vulkan layer env ===\"; find ~/.conan2/p -iname \"*VkLayer*validation*\" 2>/dev/null | head)",
+      "Read(//Users/noam/.conan2/p/**)"
+    ]
+  }
+}

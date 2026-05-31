@@ -9,10 +9,16 @@ class VulkanCAEViewerConan(ConanFile):
     settings = "os", "compiler", "build_type", "arch"
 
     def requirements(self):
-        self.requires("qt/6.7.1")
-        self.requires("vulkan-headers/1.3.268.0")
-        self.requires("vulkan-loader/1.3.268.0")
-        self.requires("shaderc/2024.0")  # provides the glslc binary
+        self.requires("qt/6.8.3")
+        # Qt 6.8.3 hard-pins moltenvk/1.2.2, which only compiles against
+        # glslang/1.3.239.0. Keep the entire Vulkan/SPIR-V stack on that same
+        # 1.3.239.0 line so glslang stays consistent across moltenvk and
+        # shaderc. shaderc/2023.6 is the version whose glslang dependency
+        # matches exactly (newer shaderc pulls glslang 1.3.261+/1.4.x and
+        # conflicts). This is what lets MoltenVK build.
+        self.requires("vulkan-headers/1.3.239.0")
+        self.requires("vulkan-loader/1.3.239.0")
+        self.requires("shaderc/2023.6")  # provides the glslc binary
 
     def configure(self):
         # Qt must be shared on macOS (frameworks), and Quick needs qtdeclarative
@@ -20,6 +26,10 @@ class VulkanCAEViewerConan(ConanFile):
         self.options["qt"].qtdeclarative = True   # QtQuick
         self.options["qt"].qtshadertools = True   # QtQuick's Vulkan/Metal shader pipeline
         self.options["qt"].with_vulkan = True
+        self.options["qt"].opengl = "no"           # AGL framework removed in macOS 26 SDK; Vulkan/Metal makes it unnecessary
+        self.options["qt"].with_pq = False        # PostgreSQL driver — not needed, avoids libpq build error
+        self.options["qt"].with_mysql_client = False
+        self.options["qt"].with_odbc = False
 
     def layout(self):
         cmake_layout(self)
@@ -34,7 +44,9 @@ class VulkanCAEViewerConan(ConanFile):
         deps.set_property("vulkan-loader", "cmake_target_name", "Vulkan::Vulkan")
         deps.generate()
 
-        tc = CMakeToolchain(self)
+        # Force the Ninja generator so `cmake --preset` produces a build.ninja
+        # (otherwise Conan defaults to "Unix Makefiles" from the profile).
+        tc = CMakeToolchain(self, generator="Ninja")
 
         # Prefer Conan-generated config files over CMake's built-in module
         # finders (e.g. FindVulkan.cmake), so the remapping above takes effect.
