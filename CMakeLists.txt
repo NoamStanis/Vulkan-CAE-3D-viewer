@@ -42,7 +42,9 @@ add_custom_target(Shaders ALL DEPENDS ${SHADER_BINARIES})
 # Note: the executable target name must differ from the QML module URI below.
 # qt_add_qml_module creates a "<URI>" directory in the build tree; if that
 # matches the executable's output name the linker fails with EISDIR.
-qt_add_executable(VulkanCAEViewerApp
+# WIN32 makes this a GUI app on Windows (no console window); it is ignored on
+# other platforms.
+qt_add_executable(VulkanCAEViewerApp WIN32
     src/main.cpp
     src/ViewerItem.cpp
     src/ViewerItem.h

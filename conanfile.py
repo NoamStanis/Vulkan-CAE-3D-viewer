@@ -10,26 +10,38 @@ class VulkanCAEViewerConan(ConanFile):
 
     def requirements(self):
         self.requires("qt/6.8.3")
-        # Qt 6.8.3 hard-pins moltenvk/1.2.2, which only compiles against
-        # glslang/1.3.239.0. Keep the entire Vulkan/SPIR-V stack on that same
-        # 1.3.239.0 line so glslang stays consistent across moltenvk and
-        # shaderc. shaderc/2023.6 is the version whose glslang dependency
-        # matches exactly (newer shaderc pulls glslang 1.3.261+/1.4.x and
-        # conflicts). This is what lets MoltenVK build.
-        self.requires("vulkan-headers/1.3.239.0")
-        self.requires("vulkan-loader/1.3.239.0")
-        self.requires("shaderc/2023.6")  # provides the glslc binary
+        if self.settings.os == "Macos":
+            # On macOS, Qt 6.8.3 hard-pins moltenvk/1.2.2 (the Vulkan-on-Metal
+            # driver), which only compiles against glslang/1.3.239.0. Keep the
+            # entire Vulkan/SPIR-V stack on that same 1.3.239.0 line so glslang
+            # stays consistent across moltenvk and shaderc. shaderc/2023.6 is
+            # the version whose glslang dependency matches exactly (newer
+            # shaderc pulls glslang 1.3.261+/1.4.x and conflicts). This is what
+            # lets MoltenVK build.
+            self.requires("vulkan-headers/1.3.239.0")
+            self.requires("vulkan-loader/1.3.239.0")
+            self.requires("shaderc/2023.6")  # provides the glslc binary
+        else:
+            # Windows/Linux use the GPU vendor's native Vulkan driver — there's
+            # no MoltenVK in the graph, so the glslang conflict above does not
+            # apply and we can track a current, aligned Vulkan/SPIR-V stack.
+            self.requires("vulkan-headers/1.3.290.0")
+            self.requires("vulkan-loader/1.3.290.0")
+            self.requires("shaderc/2024.1")  # provides the glslc binary
 
     def configure(self):
-        # Qt must be shared on macOS (frameworks), and Quick needs qtdeclarative
         self.options["qt"].shared = True
         self.options["qt"].qtdeclarative = True   # QtQuick
         self.options["qt"].qtshadertools = True   # QtQuick's Vulkan/Metal shader pipeline
         self.options["qt"].with_vulkan = True
-        self.options["qt"].opengl = "no"           # AGL framework removed in macOS 26 SDK; Vulkan/Metal makes it unnecessary
         self.options["qt"].with_pq = False        # PostgreSQL driver — not needed, avoids libpq build error
         self.options["qt"].with_mysql_client = False
         self.options["qt"].with_odbc = False
+        if self.settings.os == "Macos":
+            # AGL framework was removed from the macOS 26 SDK; on macOS we render
+            # via Vulkan/Metal so OpenGL is unnecessary. Leave Qt's default
+            # OpenGL support on other platforms.
+            self.options["qt"].opengl = "no"
 
     def layout(self):
         cmake_layout(self)
@@ -56,7 +68,7 @@ class VulkanCAEViewerConan(ConanFile):
         # resolves to the glslc binary installed by the shaderc Conan package.
         shaderc_bindirs = self.dependencies["shaderc"].cpp_info.bindirs
         if shaderc_bindirs:
-            glslc = os.path.join(shaderc_bindirs[0], "glslc")
-            tc.variables["GLSLC"] = glslc
+            exe = "glslc.exe" if self.settings.os == "Windows" else "glslc"
+            tc.variables["GLSLC"] = os.path.join(shaderc_bindirs[0], exe)
 
         tc.generate()
