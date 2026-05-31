@@ -1,0 +1,19 @@
+$ Exercises large-field and free-field GRID/element formats plus a continuation.
+BEGIN BULK
+$ --- Large field: card name has trailing '*', fields are 16 cols wide, and the
+$ --- line is continued onto a second line that also starts with '*'. ---
+$GRID*   ID              CP              X1              X2             +cont
+$*      +cont            X3
+GRID*   100                             0.0             0.0            *
+*                       0.0
+GRID*   101                             2.0             0.0            *
+*                       0.0
+GRID*   102                             0.0             2.0            *
+*                       0.0
+GRID*   103                             0.0             0.0            *
+*                       2.0
+$ --- Free field: comma-separated ---
+GRID,200,,3.0,3.0,3.0
+$ --- Free-field tetra referencing the large-field nodes ---
+CTETRA,10,1,100,101,102,103
+ENDDATA

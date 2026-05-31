@@ -1,0 +1,24 @@
+$ Small test deck for the Nastran .bdf reader (Layer 1).
+$ Covers: comments, GRID (small field), CTETRA (volume), CTRIA3/CQUAD4 (shells).
+$ Field layout is fixed 8-column small field: 10 fields of 8 chars per line.
+$
+$23456789012345678901234567890123456789012345678901234567890123456789012345678
+BEGIN BULK
+$ --- Nodes ---
+$GRID    ID      CP      X1      X2      X3
+GRID    1               0.0     0.0     0.0
+GRID    2               1.0     0.0     0.0
+GRID    3               0.0     1.0     0.0
+GRID    4               0.0     0.0     1.0
+GRID    5               1.0     1.0     0.0
+GRID    6               1.0     1.0     1.0
+$ --- One tetrahedron (volume element) ---
+$CTETRA  EID     PID     G1      G2      G3      G4
+CTETRA  10      1       1       2       3       4
+$ --- A triangular shell ---
+$CTRIA3  EID     PID     G1      G2      G3
+CTRIA3  20      1       2       5       3
+$ --- A quad shell ---
+$CQUAD4  EID     PID     G1      G2      G3      G4
+CQUAD4  30      1       2       5       6       3
+ENDDATA
