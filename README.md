@@ -1,13 +1,45 @@
 # Vulkan CAE 3D Viewer
 
-A minimal Qt Quick + Vulkan application that renders a triangle into an
-offscreen `VkImage` and composites it into the QML scene graph as a
-`QSGTexture`. On macOS, Vulkan runs on top of Metal via **MoltenVK**; on
+A Qt Quick + Vulkan application for viewing CAE / vibroacoustics models. It
+renders an indexed 3D mesh into an offscreen `VkImage` and composites it into
+the QML scene graph as a `QSGTexture`, with a trackball camera and an XYZ
+orientation gizmo. On macOS, Vulkan runs on top of Metal via **MoltenVK**; on
 Windows and Linux it uses the GPU vendor's native Vulkan driver.
+
+The renderer currently loads **Wavefront OBJ** meshes. A hand-written
+**Nastran `.bdf`** reader (producing a VTK unstructured grid) exists and is
+verified in isolation, as the first step toward viewing finite-element models
+and vibroacoustics results — see [Status & roadmap](#status--roadmap) and
+[`docs/PROJECT_NOTES.md`](docs/PROJECT_NOTES.md).
 
 Dependencies are managed with **Conan**, configured with **CMake**, and built
 with **Ninja**. The C++/QML sources are platform-agnostic — all platform
 differences live in `conanfile.py` and the run-time environment.
+
+---
+
+## Status & roadmap
+
+**Working today:**
+
+- Vulkan-rendered viewport composited into QML (offscreen `VkImage` →
+  `QSGTexture`), validated threading model (render thread vs. main thread).
+- Indexed mesh rendering with a depth buffer and per-vertex lit shading.
+- Trackball camera: **drag** to orbit, **scroll** to zoom; framed to the model.
+- XYZ axis gizmo (red/green/blue) for orientation.
+- OBJ model loading via tinyobjloader (`assets/`); falls back to a cube.
+
+**In progress — CAE / vibroacoustics support (not yet in the app build):**
+
+- A hand-written Nastran `.bdf` reader (`src/io/NastranReader.*`) → VTK
+  `vtkUnstructuredGrid`, verified by a standalone test harness.
+- VTK is used **headlessly** as a data/filter layer only (readers, free-surface
+  extraction, colormaps) — the existing Vulkan pipeline remains the renderer.
+
+The next milestones are: convert the extracted FE surface to renderable
+geometry (Layer 2), then mode shapes and scalar-field coloring (Layers 3–4).
+Full background and the rationale behind these decisions live in
+[`docs/PROJECT_NOTES.md`](docs/PROJECT_NOTES.md).
 
 ---
 
@@ -19,9 +51,24 @@ differences live in `conanfile.py` and the run-time environment.
   ```
 - **CMake ≥ 3.21** and **Ninja**
 
-> All other dependencies (Qt 6, the Vulkan loader, shaderc/glslc, glslang, and
-> on macOS MoltenVK) are pulled in automatically by Conan — you do **not** need
-> the LunarG Vulkan SDK or a system Qt installation.
+> All other dependencies (Qt 6, the Vulkan loader, shaderc/glslc, glslang,
+> tinyobjloader, and on macOS MoltenVK) are pulled in automatically by Conan —
+> you do **not** need the LunarG Vulkan SDK or a system Qt installation.
+
+### Optional: VTK (for the in-progress CAE/Nastran work)
+
+The Nastran reader and the planned FE/results pipeline use **VTK** as a headless
+data/filter layer. VTK is **not** on Conan Center, so it is brought in as a
+separate (non-Conan) dependency and is **not required to build or run the main
+app today**. On macOS:
+
+```bash
+brew install vtk        # VTK 9.6.x bottle; no source build
+```
+
+CMake locates it via `-DVTK_DIR="$(brew --prefix vtk)/lib/cmake/vtk-9.6"`.
+Currently this is only exercised by the standalone harnesses under
+`experiments/` (see [`docs/PROJECT_NOTES.md`](docs/PROJECT_NOTES.md)).
 
 ### Platform-specific toolchain
 
@@ -112,8 +159,9 @@ build\Release\generators\conanrun.bat
 build\Release\VulkanCAEViewerApp.exe
 ```
 
-You should see a 1280×720 window titled **"Vulkan CAE Viewer — Step 1"** showing
-an RGB-gradient triangle, with a QML overlay bar across the top.
+You should see a 1280×720 window showing a shaded 3D model with red/green/blue
+XYZ axis lines through the origin, and a QML overlay bar across the top.
+**Drag** with the left mouse button to orbit the camera; **scroll** to zoom.
 
 > **macOS:** if the app exits immediately with a Vulkan instance creation
 > error, the ICD env var (`VK_ICD_FILENAMES` / `VK_DRIVER_FILES`) was not set —
@@ -133,9 +181,16 @@ an RGB-gradient triangle, with a QML overlay bar across the top.
 | `CMakeLists.txt`         | Build definition; compiles shaders and the QML module         |
 | `src/main.cpp`           | App entry point; forces the Vulkan RHI backend                |
 | `src/ViewerItem.*`       | `QQuickItem` that drives the renderer and wraps its output     |
-| `src/VulkanRenderer.*`   | Owns the Vulkan objects; renders the triangle offscreen       |
+| `src/VulkanRenderer.*`   | Owns the Vulkan objects; renders the mesh + axes offscreen     |
+| `src/TrackballCamera.*`  | Orbit camera (quaternion); produces the MVP matrix            |
+| `src/Mesh.*`             | CPU mesh representation, OBJ loader, cube fallback, bounds     |
+| `src/io/NastranReader.*` | Nastran `.bdf` reader → VTK grid (not yet in the app build)    |
 | `shaders/`               | GLSL sources, compiled to SPIR-V via `glslc` at build time    |
-| `main.qml`               | UI: the viewport plus overlay                                 |
+| `assets/`                | Bundled model(s) loaded at run time                           |
+| `main.qml`               | UI: the viewport, camera input, and overlay                   |
+| `test/data/`             | Sample `.bdf` decks for the Nastran reader                    |
+| `experiments/`           | Standalone harnesses (VTK smoke test, Nastran reader test)    |
+| `docs/PROJECT_NOTES.md`  | Design decisions, rationale, and roadmap for future sessions  |
 
 ---
 
