@@ -26,7 +26,7 @@ ViewerItem::ViewerItem(QQuickItem *parent)
     // unit cube if the asset is missing or unreadable. The prepared MeshData is
     // handed to the renderer when the scene graph initialises.
     try {
-        m_mesh = loadObj(ASSET_DIR "suzanne.obj");
+        m_mesh = loadObj(ASSET_DIR "satellite.obj");
     } catch (const std::exception &e) {
         qWarning() << "ViewerItem: OBJ load failed, using fallback cube:" << e.what();
         m_mesh = makeCube();
