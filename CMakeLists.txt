@@ -11,6 +11,27 @@ find_package(Qt6 REQUIRED COMPONENTS Core Gui Quick)
 find_package(Vulkan REQUIRED)
 find_package(tinyobjloader REQUIRED)
 
+# VTK is an optional, non-Conan dependency used headlessly for CAE formats
+# (Nastran .bdf → surface extraction). It is NOT on Conan Center; install it
+# separately (macOS: `brew install vtk`) and point CMake at it with
+#   -DVTK_DIR="$(brew --prefix vtk)/lib/cmake/vtk-9.6"
+# When absent, the app still builds with OBJ-only support.
+#
+# IMPORTANT: VTK's architecture must match the app (arm64 on Apple Silicon).
+# Use the arm64 Homebrew at /opt/homebrew, not the x86_64 one at /usr/local.
+find_package(VTK 9.6 QUIET COMPONENTS
+    CommonCore
+    CommonDataModel
+    FiltersCore
+    FiltersGeometry
+)
+if(VTK_FOUND)
+    message(STATUS "VTK ${VTK_VERSION} found — Nastran/.bdf support enabled")
+else()
+    message(STATUS "VTK not found — building with OBJ-only support "
+                   "(set VTK_DIR to enable .bdf import)")
+endif()
+
 # Locate glslc for shader compilation
 find_program(GLSLC glslc HINTS ENV VULKAN_SDK PATH_SUFFIXES bin REQUIRED)
 
@@ -59,6 +80,17 @@ qt_add_executable(VulkanCAEViewerApp WIN32
     src/TrackballCamera.h
 )
 
+# Nastran/.bdf import is compiled in only when VTK is available.
+if(VTK_FOUND)
+    target_sources(VulkanCAEViewerApp PRIVATE
+        src/io/NastranReader.cpp
+        src/io/NastranReader.h
+        src/io/VtkSurface.cpp
+        src/io/VtkSurface.h
+    )
+    target_compile_definitions(VulkanCAEViewerApp PRIVATE HAVE_VTK=1)
+endif()
+
 add_dependencies(VulkanCAEViewerApp Shaders)
 
 qt_add_qml_module(VulkanCAEViewerApp
@@ -69,6 +101,7 @@ qt_add_qml_module(VulkanCAEViewerApp
 
 target_include_directories(VulkanCAEViewerApp PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/io
     ${Vulkan_INCLUDE_DIRS}
 )
 
@@ -86,3 +119,9 @@ target_link_libraries(VulkanCAEViewerApp PRIVATE
     Vulkan::Vulkan
     tinyobjloader::tinyobjloader
 )
+
+if(VTK_FOUND)
+    target_link_libraries(VulkanCAEViewerApp PRIVATE ${VTK_LIBRARIES})
+    # VTK 9 module autoinit: required so factory-backed classes register at runtime.
+    vtk_module_autoinit(TARGETS VulkanCAEViewerApp MODULES ${VTK_LIBRARIES})
+endif()

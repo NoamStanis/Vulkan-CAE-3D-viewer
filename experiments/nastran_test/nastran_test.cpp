@@ -2,11 +2,13 @@
 // sanity check. Not part of the app build; run from this experiments dir.
 
 #include "NastranReader.h"
+#include "VtkSurface.h"
 
 #include <vtkDataSetSurfaceFilter.h>
 #include <vtkTriangleFilter.h>
 #include <vtkPolyData.h>
 
+#include <cmath>
 #include <cstdio>
 #include <string>
 
@@ -79,6 +81,38 @@ int main(int argc, char **argv)
         const vtkIdType nTris = tris->GetOutput()->GetNumberOfPolys();
         std::printf("    surface triangles=%lld\n", static_cast<long long>(nTris));
         check(nTris > 0, "surface extraction yields triangles");
+    }
+
+    // ── Layer-2 converter: grid → MeshData ─────────────────────────────────────
+    std::printf("== VtkSurface::toMeshData ==\n");
+    {
+        auto grid = NastranReader::read(dataDir + "tet_and_shells.bdf");
+        MeshData mesh = VtkSurface::toMeshData(grid);
+        std::printf("    vertices=%zu indices=%zu tris=%zu\n",
+                    mesh.vertices.size(), mesh.indices.size(), mesh.indices.size() / 3);
+        check(!mesh.vertices.empty(), "MeshData has vertices");
+        check(mesh.indices.size() % 3 == 0, "index count is a multiple of 3");
+        check(!mesh.indices.empty(), "MeshData has triangles");
+
+        // Every index must reference a valid vertex.
+        bool indicesInRange = true;
+        for (uint32_t idx : mesh.indices)
+            if (idx >= mesh.vertices.size()) indicesInRange = false;
+        check(indicesInRange, "all indices reference valid vertices");
+
+        // Normals should be roughly unit length.
+        bool normalsUnit = true;
+        for (const Vertex &v : mesh.vertices) {
+            const float len = std::sqrt(v.normal[0]*v.normal[0] +
+                                        v.normal[1]*v.normal[1] +
+                                        v.normal[2]*v.normal[2]);
+            if (std::abs(len - 1.0f) > 1e-3f) normalsUnit = false;
+        }
+        check(normalsUnit, "vertex normals are unit length");
+
+        // Bounds should be the unit-ish extent of the test deck (coords in [0,1]).
+        Bounds b = mesh.bounds();
+        check(b.radius() > 0.0f, "non-degenerate bounds");
     }
 
     std::printf("\n%s (%d failure%s)\n",

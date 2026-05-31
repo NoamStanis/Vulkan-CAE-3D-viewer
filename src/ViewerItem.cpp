@@ -7,8 +7,39 @@
 #include <QSGRendererInterface>
 #include <QSGTexture>
 #include <QVulkanInstance>
+#include <QFileInfo>
 #include <QDebug>
 #include <vulkan/vulkan.h>
+
+#ifdef HAVE_VTK
+#include "io/NastranReader.h"
+#include "io/VtkSurface.h"
+#endif
+
+namespace {
+
+// Load a model file into MeshData by extension. Nastran .bdf is supported only
+// when the app was compiled with VTK (HAVE_VTK). Throws on failure; the caller
+// decides the fallback.
+MeshData loadModelFile(const QString &path)
+{
+    const QString suffix = QFileInfo(path).suffix().toLower();
+    const std::string p = path.toStdString();
+
+    if (suffix == "bdf" || suffix == "nas" || suffix == "dat") {
+#ifdef HAVE_VTK
+        auto grid = NastranReader::read(p);
+        return VtkSurface::toMeshData(grid);
+#else
+        throw std::runtime_error(
+            "Nastran .bdf requires a VTK-enabled build (set VTK_DIR and rebuild)");
+#endif
+    }
+    // Default: Wavefront OBJ.
+    return loadObj(p);
+}
+
+} // namespace
 
 // QNativeInterface::QSGVulkanTexture is declared in Qt 6.2+.
 // It is typically pulled in by <QQuickWindow> transitively.
@@ -25,10 +56,22 @@ ViewerItem::ViewerItem(QQuickItem *parent)
     // Load the model on the main thread (file I/O + bounds), falling back to a
     // unit cube if the asset is missing or unreadable. The prepared MeshData is
     // handed to the renderer when the scene graph initialises.
+    //
+    // Default model: prefer a Nastran .bdf when the build has VTK, otherwise the
+    // bundled OBJ. (A future revision exposes this as a `source` QML property.)
+#ifdef HAVE_VTK
+    const QString defaultModel = QStringLiteral(ASSET_DIR "model.bdf");
+#else
+    const QString defaultModel = QStringLiteral(ASSET_DIR "satellite.obj");
+#endif
     try {
-        m_mesh = loadObj(ASSET_DIR "satellite.obj");
+        m_mesh = loadModelFile(defaultModel);
+        qInfo() << "ViewerItem: loaded model" << defaultModel
+                << "(" << static_cast<int>(m_mesh.vertices.size()) << "verts,"
+                << static_cast<int>(m_mesh.indices.size() / 3) << "tris )";
     } catch (const std::exception &e) {
-        qWarning() << "ViewerItem: OBJ load failed, using fallback cube:" << e.what();
+        qWarning() << "ViewerItem: model load failed (" << e.what()
+                   << ") — using fallback cube";
         m_mesh = makeCube();
     }
 
