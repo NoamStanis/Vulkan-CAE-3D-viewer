@@ -50,6 +50,8 @@ private:
     // ── Helpers ──────────────────────────────────────────────────────────────
     void createImageResources();
     void destroyImageResources();
+    void createDepthResources();
+    void destroyDepthResources();
     void createRenderPass();
     void createFramebuffer();
     void createPipeline();
@@ -78,6 +80,11 @@ private:
     VkDeviceMemory m_colorImageMemory = VK_NULL_HANDLE;
     VkImageView    m_colorImageView   = VK_NULL_HANDLE;
 
+    // Depth buffer (not sampled by Qt — render-pass-internal only)
+    VkImage        m_depthImage       = VK_NULL_HANDLE;
+    VkDeviceMemory m_depthImageMemory = VK_NULL_HANDLE;
+    VkImageView    m_depthImageView   = VK_NULL_HANDLE;
+
     // Render pass + framebuffer
     VkRenderPass  m_renderPass  = VK_NULL_HANDLE;
     VkFramebuffer m_framebuffer = VK_NULL_HANDLE;
@@ -94,4 +101,5 @@ private:
     VkFence m_fence = VK_NULL_HANDLE;
 
     static constexpr VkFormat k_colorFormat = VK_FORMAT_R8G8B8A8_UNORM;
+    static constexpr VkFormat k_depthFormat = VK_FORMAT_D32_SFLOAT;
 };
