@@ -1,14 +1,17 @@
 #pragma once
 
+#include "Mesh.h"
+
 #include <vulkan/vulkan.h>
 #include <QSize>
 #include <QString>
+#include <QMatrix4x4>
 #include <stdexcept>
 
 // ─────────────────────────────────────────────────────────────────────────────
 // VulkanRenderer
 //
-// Owns all Vulkan objects needed to render a colored triangle into an offscreen
+// Owns all Vulkan objects needed to render an indexed mesh into an offscreen
 // VkImage. Intentionally does NOT own the VkInstance, VkPhysicalDevice, or
 // VkDevice — those are borrowed from Qt's scene graph so we share one GPU
 // context with the compositor.
@@ -41,6 +44,10 @@ public:
     void resize(const QSize &size);
     void render();
 
+    // Set the model-view-projection matrix used for the next render().
+    // Called on the render thread (from updatePaintNode) before render().
+    void setMvp(const QMatrix4x4 &mvp) { m_mvp = mvp; }
+
     // The image is in VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL after render().
     VkImage     colorImage()  const { return m_colorImage; }
     VkImageView colorImageView() const { return m_colorImageView; }
@@ -57,9 +64,28 @@ private:
     void createPipeline();
     void createCommandPool();
     void createSyncObjects();
+    void createMeshBuffers(const MeshData &mesh);
+    void createUniformBuffer();
+    void createDescriptors();
 
     uint32_t findMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties) const;
     VkShaderModule loadShaderModule(const QString &spvPath) const;
+
+    // Allocate a VkBuffer + backing memory. Caller owns and must destroy both.
+    void createBuffer(VkDeviceSize size,
+                      VkBufferUsageFlags usage,
+                      VkMemoryPropertyFlags properties,
+                      VkBuffer &buffer,
+                      VkDeviceMemory &memory) const;
+
+    // Copy host data into a new device-local buffer via a staging buffer.
+    // Used for vertex/index data that never changes after upload.
+    void uploadToDeviceLocalBuffer(const void *src,
+                                   VkDeviceSize size,
+                                   VkBufferUsageFlags usage,
+                                   VkBuffer &buffer,
+                                   VkDeviceMemory &memory);
+
     void transitionImageLayout(VkCommandBuffer cmd,
                                VkImage image,
                                VkImageLayout oldLayout,
@@ -92,6 +118,24 @@ private:
     // Graphics pipeline
     VkPipelineLayout m_pipelineLayout = VK_NULL_HANDLE;
     VkPipeline       m_pipeline       = VK_NULL_HANDLE;
+
+    // Mesh geometry (device-local, uploaded once)
+    VkBuffer       m_vertexBuffer       = VK_NULL_HANDLE;
+    VkDeviceMemory m_vertexBufferMemory = VK_NULL_HANDLE;
+    VkBuffer       m_indexBuffer        = VK_NULL_HANDLE;
+    VkDeviceMemory m_indexBufferMemory  = VK_NULL_HANDLE;
+    uint32_t       m_indexCount         = 0;
+
+    // Uniform buffer (MVP), host-visible and persistently mapped.
+    VkBuffer              m_uniformBuffer       = VK_NULL_HANDLE;
+    VkDeviceMemory        m_uniformBufferMemory = VK_NULL_HANDLE;
+    void                 *m_uniformMapped       = nullptr;
+    VkDescriptorSetLayout m_descriptorSetLayout = VK_NULL_HANDLE;
+    VkDescriptorPool      m_descriptorPool      = VK_NULL_HANDLE;
+    VkDescriptorSet       m_descriptorSet       = VK_NULL_HANDLE;
+
+    // Current MVP, uploaded into the uniform buffer each render().
+    QMatrix4x4 m_mvp;
 
     // Command recording
     VkCommandPool   m_commandPool   = VK_NULL_HANDLE;

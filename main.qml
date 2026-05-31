@@ -7,13 +7,40 @@ Window {
     width:  1280
     height: 720
     visible: true
-    title: "Vulkan CAE Viewer — Step 1"
+    title: "Vulkan CAE Viewer — drag to rotate, scroll to zoom"
     color: "#141416"
 
     // ── 3D Viewport ───────────────────────────────────────────────────────────
     ViewerItem {
         id: viewer
         anchors.fill: parent
+
+        // Drag with the left mouse button to orbit the camera.
+        MouseArea {
+            id: dragArea
+            anchors.fill: parent
+            acceptedButtons: Qt.LeftButton
+            property real lastX: 0
+            property real lastY: 0
+
+            onPressed: (mouse) => {
+                lastX = mouse.x;
+                lastY = mouse.y;
+            }
+            onPositionChanged: (mouse) => {
+                viewer.orbit(mouse.x - lastX, mouse.y - lastY);
+                lastX = mouse.x;
+                lastY = mouse.y;
+            }
+        }
+
+        // Scroll wheel / trackpad to zoom.
+        WheelHandler {
+            target: null  // handle the event ourselves, don't transform an item
+            onWheel: (event) => {
+                viewer.zoom(event.angleDelta.y / 120.0);
+            }
+        }
     }
 
     // ── Overlay UI (demonstrates that QML sits correctly above the Vulkan surface)

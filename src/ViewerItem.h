@@ -1,5 +1,7 @@
 #pragma once
 
+#include "TrackballCamera.h"
+
 #include <QQuickItem>
 #include <QSGTexture>
 #include <memory>
@@ -25,6 +27,11 @@ public:
     explicit ViewerItem(QQuickItem *parent = nullptr);
     ~ViewerItem() override;
 
+    // Camera controls, called from QML input handlers on the main thread.
+    // dx/dy are pixel deltas; they are normalised by the item size internally.
+    Q_INVOKABLE void orbit(qreal dxPixels, qreal dyPixels);
+    Q_INVOKABLE void zoom(qreal steps);
+
 protected:
     // Called on the render thread when the scene graph is ready.
     // Safe to create Vulkan resources here.
@@ -48,4 +55,8 @@ private:
     // only entered after the main thread is blocked).
     QSize m_pendingSize;
     bool  m_sizeChanged = false;
+
+    // Camera lives on the main thread; only the resulting matrix crosses to the
+    // render thread, inside updatePaintNode (main thread blocked there).
+    TrackballCamera m_camera;
 };

@@ -19,8 +19,8 @@ set(SHADER_BINARY_DIR ${CMAKE_CURRENT_BINARY_DIR}/shaders)
 file(MAKE_DIRECTORY ${SHADER_BINARY_DIR})
 
 set(SHADER_SOURCES
-    ${SHADER_SOURCE_DIR}/triangle.vert
-    ${SHADER_SOURCE_DIR}/triangle.frag
+    ${SHADER_SOURCE_DIR}/mesh.vert
+    ${SHADER_SOURCE_DIR}/mesh.frag
 )
 
 set(SHADER_BINARIES "")
@@ -50,6 +50,10 @@ qt_add_executable(VulkanCAEViewerApp WIN32
     src/ViewerItem.h
     src/VulkanRenderer.cpp
     src/VulkanRenderer.h
+    src/Mesh.cpp
+    src/Mesh.h
+    src/TrackballCamera.cpp
+    src/TrackballCamera.h
 )
 
 add_dependencies(VulkanCAEViewerApp Shaders)

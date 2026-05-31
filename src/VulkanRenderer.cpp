@@ -3,6 +3,7 @@
 #include <QFile>
 #include <QDebug>
 #include <array>
+#include <cstring>
 #include <vector>
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -42,6 +43,27 @@ VulkanRenderer::~VulkanRenderer()
         vkDestroyPipeline(m_device, m_pipeline, nullptr);
     if (m_pipelineLayout != VK_NULL_HANDLE)
         vkDestroyPipelineLayout(m_device, m_pipelineLayout, nullptr);
+
+    if (m_descriptorPool != VK_NULL_HANDLE)
+        vkDestroyDescriptorPool(m_device, m_descriptorPool, nullptr);
+    if (m_descriptorSetLayout != VK_NULL_HANDLE)
+        vkDestroyDescriptorSetLayout(m_device, m_descriptorSetLayout, nullptr);
+    if (m_uniformBuffer != VK_NULL_HANDLE)
+        vkDestroyBuffer(m_device, m_uniformBuffer, nullptr);
+    if (m_uniformBufferMemory != VK_NULL_HANDLE) {
+        // Persistently mapped; unmap implicitly handled by freeing the memory.
+        vkFreeMemory(m_device, m_uniformBufferMemory, nullptr);
+    }
+
+    if (m_indexBuffer != VK_NULL_HANDLE)
+        vkDestroyBuffer(m_device, m_indexBuffer, nullptr);
+    if (m_indexBufferMemory != VK_NULL_HANDLE)
+        vkFreeMemory(m_device, m_indexBufferMemory, nullptr);
+    if (m_vertexBuffer != VK_NULL_HANDLE)
+        vkDestroyBuffer(m_device, m_vertexBuffer, nullptr);
+    if (m_vertexBufferMemory != VK_NULL_HANDLE)
+        vkFreeMemory(m_device, m_vertexBufferMemory, nullptr);
+
     if (m_framebuffer != VK_NULL_HANDLE)
         vkDestroyFramebuffer(m_device, m_framebuffer, nullptr);
     if (m_renderPass != VK_NULL_HANDLE)
@@ -61,8 +83,13 @@ void VulkanRenderer::init(const QSize &size)
     createRenderPass();
     createImageResources();
     createDepthResources();
-    createFramebuffer();
+    createUniformBuffer();   // descriptor set layout used by the pipeline layout
     createPipeline();
+    createDescriptors();     // pool + set, bound to the uniform buffer
+    createFramebuffer();
+
+    // Step 2: hardcoded cube. Replaced by a loaded mesh in a later step.
+    createMeshBuffers(makeCube());
 }
 
 void VulkanRenderer::resize(const QSize &size)
@@ -87,6 +114,10 @@ void VulkanRenderer::resize(const QSize &size)
 // ─────────────────────────────────────────────────────────────────────────────
 void VulkanRenderer::render()
 {
+    // Upload the current MVP. QMatrix4x4 stores values column-major internally
+    // and constData() returns them in the order GLSL/std140 expects for a mat4.
+    std::memcpy(m_uniformMapped, m_mvp.constData(), sizeof(float) * 16);
+
     // Reset fence and command buffer
     vkResetFences(m_device, 1, &m_fence);
     vkResetCommandBuffer(m_commandBuffer, 0);
@@ -137,7 +168,15 @@ void VulkanRenderer::render()
                       static_cast<uint32_t>(m_size.height())};
     vkCmdSetScissor(m_commandBuffer, 0, 1, &scissor);
 
-    vkCmdDraw(m_commandBuffer, 3, 1, 0, 0); // 3 hardcoded verts in the shader
+    vkCmdBindDescriptorSets(m_commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                            m_pipelineLayout, 0, 1, &m_descriptorSet, 0, nullptr);
+
+    VkBuffer     vertexBuffers[] = {m_vertexBuffer};
+    VkDeviceSize offsets[]       = {0};
+    vkCmdBindVertexBuffers(m_commandBuffer, 0, 1, vertexBuffers, offsets);
+    vkCmdBindIndexBuffer(m_commandBuffer, m_indexBuffer, 0, VK_INDEX_TYPE_UINT32);
+
+    vkCmdDrawIndexed(m_commandBuffer, m_indexCount, 1, 0, 0, 0);
 
     vkCmdEndRenderPass(m_commandBuffer);
 
@@ -325,6 +364,182 @@ void VulkanRenderer::destroyDepthResources()
     }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Buffer helpers
+// ─────────────────────────────────────────────────────────────────────────────
+
+void VulkanRenderer::createBuffer(VkDeviceSize          size,
+                                  VkBufferUsageFlags    usage,
+                                  VkMemoryPropertyFlags properties,
+                                  VkBuffer             &buffer,
+                                  VkDeviceMemory       &memory) const
+{
+    VkBufferCreateInfo bufferInfo{};
+    bufferInfo.sType       = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    bufferInfo.size        = size;
+    bufferInfo.usage       = usage;
+    bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    VK_CHECK(vkCreateBuffer(m_device, &bufferInfo, nullptr, &buffer), "vkCreateBuffer");
+
+    VkMemoryRequirements memReqs;
+    vkGetBufferMemoryRequirements(m_device, buffer, &memReqs);
+
+    VkMemoryAllocateInfo allocInfo{};
+    allocInfo.sType           = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    allocInfo.allocationSize  = memReqs.size;
+    allocInfo.memoryTypeIndex = findMemoryType(memReqs.memoryTypeBits, properties);
+    VK_CHECK(vkAllocateMemory(m_device, &allocInfo, nullptr, &memory), "vkAllocateMemory (buffer)");
+
+    VK_CHECK(vkBindBufferMemory(m_device, buffer, memory, 0), "vkBindBufferMemory");
+}
+
+void VulkanRenderer::uploadToDeviceLocalBuffer(const void        *src,
+                                               VkDeviceSize       size,
+                                               VkBufferUsageFlags usage,
+                                               VkBuffer          &buffer,
+                                               VkDeviceMemory    &memory)
+{
+    // 1. Host-visible staging buffer, filled via memcpy.
+    VkBuffer       stagingBuffer       = VK_NULL_HANDLE;
+    VkDeviceMemory stagingBufferMemory = VK_NULL_HANDLE;
+    createBuffer(size,
+                 VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                 VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                 stagingBuffer, stagingBufferMemory);
+
+    void *mapped = nullptr;
+    VK_CHECK(vkMapMemory(m_device, stagingBufferMemory, 0, size, 0, &mapped), "vkMapMemory (staging)");
+    std::memcpy(mapped, src, static_cast<size_t>(size));
+    vkUnmapMemory(m_device, stagingBufferMemory);
+
+    // 2. Device-local destination buffer.
+    createBuffer(size,
+                 VK_BUFFER_USAGE_TRANSFER_DST_BIT | usage,
+                 VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                 buffer, memory);
+
+    // 3. One-time command buffer to copy staging → device-local.
+    VkCommandBufferAllocateInfo allocInfo{};
+    allocInfo.sType              = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    allocInfo.level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    allocInfo.commandPool        = m_commandPool;
+    allocInfo.commandBufferCount = 1;
+
+    VkCommandBuffer copyCmd = VK_NULL_HANDLE;
+    VK_CHECK(vkAllocateCommandBuffers(m_device, &allocInfo, &copyCmd),
+             "vkAllocateCommandBuffers (copy)");
+
+    VkCommandBufferBeginInfo beginInfo{};
+    beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    VK_CHECK(vkBeginCommandBuffer(copyCmd, &beginInfo), "vkBeginCommandBuffer (copy)");
+
+    VkBufferCopy copyRegion{};
+    copyRegion.size = size;
+    vkCmdCopyBuffer(copyCmd, stagingBuffer, buffer, 1, &copyRegion);
+
+    VK_CHECK(vkEndCommandBuffer(copyCmd), "vkEndCommandBuffer (copy)");
+
+    VkSubmitInfo submitInfo{};
+    submitInfo.sType              = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submitInfo.commandBufferCount = 1;
+    submitInfo.pCommandBuffers    = &copyCmd;
+    VK_CHECK(vkQueueSubmit(m_queue, 1, &submitInfo, VK_NULL_HANDLE), "vkQueueSubmit (copy)");
+    // Upload happens once at init; a full queue wait is acceptable here.
+    VK_CHECK(vkQueueWaitIdle(m_queue), "vkQueueWaitIdle (copy)");
+
+    vkFreeCommandBuffers(m_device, m_commandPool, 1, &copyCmd);
+    vkDestroyBuffer(m_device, stagingBuffer, nullptr);
+    vkFreeMemory(m_device, stagingBufferMemory, nullptr);
+}
+
+void VulkanRenderer::createMeshBuffers(const MeshData &mesh)
+{
+    const VkDeviceSize vertexSize = sizeof(Vertex) * mesh.vertices.size();
+    const VkDeviceSize indexSize  = sizeof(uint32_t) * mesh.indices.size();
+
+    uploadToDeviceLocalBuffer(mesh.vertices.data(), vertexSize,
+                              VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+                              m_vertexBuffer, m_vertexBufferMemory);
+
+    uploadToDeviceLocalBuffer(mesh.indices.data(), indexSize,
+                              VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
+                              m_indexBuffer, m_indexBufferMemory);
+
+    m_indexCount = static_cast<uint32_t>(mesh.indices.size());
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Uniform buffer + descriptors (MVP)
+// ─────────────────────────────────────────────────────────────────────────────
+
+void VulkanRenderer::createUniformBuffer()
+{
+    // A single mat4 (MVP). Host-visible + coherent + persistently mapped so the
+    // render thread can overwrite it each frame with no explicit flush.
+    const VkDeviceSize bufferSize = sizeof(float) * 16;
+
+    createBuffer(bufferSize,
+                 VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+                 VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                 m_uniformBuffer, m_uniformBufferMemory);
+
+    VK_CHECK(vkMapMemory(m_device, m_uniformBufferMemory, 0, bufferSize, 0, &m_uniformMapped),
+             "vkMapMemory (uniform)");
+
+    // Descriptor set layout: binding 0 = uniform buffer, visible to vertex stage.
+    VkDescriptorSetLayoutBinding uboBinding{};
+    uboBinding.binding         = 0;
+    uboBinding.descriptorType  = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    uboBinding.descriptorCount = 1;
+    uboBinding.stageFlags      = VK_SHADER_STAGE_VERTEX_BIT;
+
+    VkDescriptorSetLayoutCreateInfo layoutInfo{};
+    layoutInfo.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    layoutInfo.bindingCount = 1;
+    layoutInfo.pBindings    = &uboBinding;
+    VK_CHECK(vkCreateDescriptorSetLayout(m_device, &layoutInfo, nullptr, &m_descriptorSetLayout),
+             "vkCreateDescriptorSetLayout");
+}
+
+void VulkanRenderer::createDescriptors()
+{
+    // Pool sized for our single uniform-buffer descriptor set.
+    VkDescriptorPoolSize poolSize{};
+    poolSize.type            = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    poolSize.descriptorCount = 1;
+
+    VkDescriptorPoolCreateInfo poolInfo{};
+    poolInfo.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    poolInfo.poolSizeCount = 1;
+    poolInfo.pPoolSizes    = &poolSize;
+    poolInfo.maxSets       = 1;
+    VK_CHECK(vkCreateDescriptorPool(m_device, &poolInfo, nullptr, &m_descriptorPool),
+             "vkCreateDescriptorPool");
+
+    VkDescriptorSetAllocateInfo allocInfo{};
+    allocInfo.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    allocInfo.descriptorPool     = m_descriptorPool;
+    allocInfo.descriptorSetCount = 1;
+    allocInfo.pSetLayouts        = &m_descriptorSetLayout;
+    VK_CHECK(vkAllocateDescriptorSets(m_device, &allocInfo, &m_descriptorSet),
+             "vkAllocateDescriptorSets");
+
+    VkDescriptorBufferInfo bufferInfo{};
+    bufferInfo.buffer = m_uniformBuffer;
+    bufferInfo.offset = 0;
+    bufferInfo.range  = sizeof(float) * 16;
+
+    VkWriteDescriptorSet write{};
+    write.sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    write.dstSet          = m_descriptorSet;
+    write.dstBinding      = 0;
+    write.descriptorType  = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    write.descriptorCount = 1;
+    write.pBufferInfo     = &bufferInfo;
+    vkUpdateDescriptorSets(m_device, 1, &write, 0, nullptr);
+}
+
 void VulkanRenderer::createRenderPass()
 {
     VkAttachmentDescription colorAttachment{};
@@ -427,8 +642,8 @@ void VulkanRenderer::createFramebuffer()
 
 void VulkanRenderer::createPipeline()
 {
-    VkShaderModule vertModule = loadShaderModule(QStringLiteral(SHADER_DIR "triangle.vert.spv"));
-    VkShaderModule fragModule = loadShaderModule(QStringLiteral(SHADER_DIR "triangle.frag.spv"));
+    VkShaderModule vertModule = loadShaderModule(QStringLiteral(SHADER_DIR "mesh.vert.spv"));
+    VkShaderModule fragModule = loadShaderModule(QStringLiteral(SHADER_DIR "mesh.frag.spv"));
 
     std::array<VkPipelineShaderStageCreateInfo, 2> stages{};
     stages[0].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
@@ -440,9 +655,15 @@ void VulkanRenderer::createPipeline()
     stages[1].module = fragModule;
     stages[1].pName  = "main";
 
-    // No vertex buffers — positions are hardcoded in the vertex shader.
+    // Interleaved position+normal vertices from a single bound buffer.
+    auto bindingDesc = Vertex::bindingDescription();
+    auto attrDescs   = Vertex::attributeDescriptions();
     VkPipelineVertexInputStateCreateInfo vertexInput{};
-    vertexInput.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+    vertexInput.sType                           = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+    vertexInput.vertexBindingDescriptionCount   = 1;
+    vertexInput.pVertexBindingDescriptions      = &bindingDesc;
+    vertexInput.vertexAttributeDescriptionCount = static_cast<uint32_t>(attrDescs.size());
+    vertexInput.pVertexAttributeDescriptions    = attrDescs.data();
 
     VkPipelineInputAssemblyStateCreateInfo inputAssembly{};
     inputAssembly.sType    = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
@@ -457,8 +678,11 @@ void VulkanRenderer::createPipeline()
     VkPipelineRasterizationStateCreateInfo rasterizer{};
     rasterizer.sType       = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
     rasterizer.polygonMode = VK_POLYGON_MODE_FILL;
-    rasterizer.cullMode    = VK_CULL_MODE_NONE;
-    rasterizer.frontFace   = VK_FRONT_FACE_CLOCKWISE;
+    rasterizer.cullMode    = VK_CULL_MODE_BACK_BIT;
+    // Cube faces wind CCW when viewed from outside. The MVP includes a Y-flip
+    // (see TrackballCamera) to map OpenGL-style NDC to Vulkan, which preserves
+    // winding, so CCW remains the front face.
+    rasterizer.frontFace   = VK_FRONT_FACE_COUNTER_CLOCKWISE;
     rasterizer.lineWidth   = 1.0f;
 
     VkPipelineMultisampleStateCreateInfo multisampling{};
@@ -493,7 +717,9 @@ void VulkanRenderer::createPipeline()
     dynamicState.pDynamicStates    = dynamicStates.data();
 
     VkPipelineLayoutCreateInfo layoutInfo{};
-    layoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    layoutInfo.sType          = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    layoutInfo.setLayoutCount = 1;
+    layoutInfo.pSetLayouts    = &m_descriptorSetLayout;
     VK_CHECK(vkCreatePipelineLayout(m_device, &layoutInfo, nullptr, &m_pipelineLayout),
              "vkCreatePipelineLayout");
 

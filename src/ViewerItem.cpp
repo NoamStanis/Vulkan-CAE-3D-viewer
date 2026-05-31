@@ -21,6 +21,10 @@ ViewerItem::ViewerItem(QQuickItem *parent)
 {
     setFlag(ItemHasContents, true);
 
+    // Frame the camera around the unit cube (radius = sqrt(3)/2 ≈ 0.87). This is
+    // a placeholder until the loaded mesh's bounds drive framing in a later step.
+    m_camera.frame(QVector3D(0, 0, 0), 0.87f);
+
     // These signals are emitted on the render thread, so use DirectConnection.
     connect(this, &QQuickItem::windowChanged, this, [this](QQuickWindow *w) {
         if (!w) return;
@@ -107,6 +111,15 @@ QSGNode *ViewerItem::updatePaintNode(QSGNode *oldNode, UpdatePaintNodeData *)
         m_sizeChanged = false;
     }
 
+    // Push the current camera matrix. We are on the render thread here, but the
+    // main thread is blocked during updatePaintNode, so reading the camera is
+    // safe without locking.
+    const QSize sz = m_renderer->size();
+    const float aspect = sz.height() > 0
+        ? static_cast<float>(sz.width()) / static_cast<float>(sz.height())
+        : 1.0f;
+    m_renderer->setMvp(m_camera.viewProjection(aspect));
+
     // Render our Vulkan scene into the offscreen VkImage.
     try {
         m_renderer->render();
@@ -120,7 +133,6 @@ QSGNode *ViewerItem::updatePaintNode(QSGNode *oldNode, UpdatePaintNodeData *)
     // QNativeInterface::QSGVulkanTexture::fromNative is the Qt 6 API for this.
     // The texture object is owned by the scene graph node below.
     VkImage vkImage = m_renderer->colorImage();
-    QSize   sz      = m_renderer->size();
 
     // fromNative wraps without taking ownership of the VkImage.
     // fromNative signature: (VkImage, VkImageLayout, QQuickWindow*, QSize, options)
@@ -174,4 +186,24 @@ void ViewerItem::geometryChange(const QRectF &newGeometry, const QRectF &oldGeom
         m_sizeChanged = true;
         update(); // trigger updatePaintNode on the render thread
     }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Camera input — main thread (invoked from QML)
+// ─────────────────────────────────────────────────────────────────────────────
+
+void ViewerItem::orbit(qreal dxPixels, qreal dyPixels)
+{
+    // Normalise by item size so a full-width drag is a consistent angular sweep.
+    const qreal w = width()  > 0 ? width()  : 1.0;
+    const qreal h = height() > 0 ? height() : 1.0;
+    m_camera.rotate(static_cast<float>(dxPixels / w),
+                    static_cast<float>(dyPixels / h));
+    update();
+}
+
+void ViewerItem::zoom(qreal steps)
+{
+    m_camera.zoom(static_cast<float>(steps));
+    update();
 }
