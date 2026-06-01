@@ -6,10 +6,11 @@ the QML scene graph as a `QSGTexture`, with a trackball camera and an XYZ
 orientation gizmo. On macOS, Vulkan runs on top of Metal via **MoltenVK**; on
 Windows and Linux it uses the GPU vendor's native Vulkan driver.
 
-The renderer currently loads **Wavefront OBJ** meshes. A hand-written
-**Nastran `.bdf`** reader (producing a VTK unstructured grid) exists and is
-verified in isolation, as the first step toward viewing finite-element models
-and vibroacoustics results — see [Status & roadmap](#status--roadmap) and
+The renderer loads **Wavefront OBJ** meshes and, in VTK-enabled builds,
+**Nastran `.bdf`** finite-element models: a hand-written reader parses the deck,
+VTK extracts the free surface headlessly, and the result renders through the
+Vulkan pipeline. This is the first step toward viewing FE models and
+vibroacoustics results — see [Status & roadmap](#status--roadmap) and
 [`docs/PROJECT_NOTES.md`](docs/PROJECT_NOTES.md).
 
 Dependencies are managed with **Conan**, configured with **CMake**, and built
@@ -28,16 +29,19 @@ differences live in `conanfile.py` and the run-time environment.
 - Trackball camera: **drag** to orbit, **scroll** to zoom; framed to the model.
 - XYZ axis gizmo (red/green/blue) for orientation.
 - OBJ model loading via tinyobjloader (`assets/`); falls back to a cube.
+- **Nastran `.bdf` finite-element models** (in VTK-enabled builds): the
+  hand-written reader (`src/io/NastranReader.*`) parses GRID + CHEXA/CTETRA/
+  CPENTA/CTRIA3/CQUAD4 into a `vtkUnstructuredGrid`; `src/io/VtkSurface.*`
+  extracts the free surface and converts it to renderable geometry. The app
+  loads `assets/model.bdf` by default and renders the FE surface. VTK is used
+  **headlessly** (data/filter only); the Vulkan pipeline remains the renderer.
 
-**In progress — CAE / vibroacoustics support (not yet in the app build):**
+**In progress — vibroacoustics results:**
 
-- A hand-written Nastran `.bdf` reader (`src/io/NastranReader.*`) → VTK
-  `vtkUnstructuredGrid`, verified by a standalone test harness.
-- VTK is used **headlessly** as a data/filter layer only (readers, free-surface
-  extraction, colormaps) — the existing Vulkan pipeline remains the renderer.
+- Next milestones are **mode shapes** (deformed geometry per eigenfrequency) and
+  **scalar-field coloring** with a colormap legend and frequency/mode selectors
+  (Layers 3–4). The viewer currently shows mesh geometry only, not results yet.
 
-The next milestones are: convert the extracted FE surface to renderable
-geometry (Layer 2), then mode shapes and scalar-field coloring (Layers 3–4).
 Full background and the rationale behind these decisions live in
 [`docs/PROJECT_NOTES.md`](docs/PROJECT_NOTES.md).
 
@@ -55,20 +59,34 @@ Full background and the rationale behind these decisions live in
 > tinyobjloader, and on macOS MoltenVK) are pulled in automatically by Conan —
 > you do **not** need the LunarG Vulkan SDK or a system Qt installation.
 
-### Optional: VTK (for the in-progress CAE/Nastran work)
+### Optional: VTK (enables Nastran `.bdf` import)
 
-The Nastran reader and the planned FE/results pipeline use **VTK** as a headless
+The Nastran reader and FE surface extraction use **VTK** as a headless
 data/filter layer. VTK is **not** on Conan Center, so it is brought in as a
-separate (non-Conan) dependency and is **not required to build or run the main
-app today**. On macOS:
+separate (non-Conan) dependency. It is **optional**: without it the app builds
+with OBJ-only support; with it, `.bdf` import is compiled in. On macOS:
 
 ```bash
 brew install vtk        # VTK 9.6.x bottle; no source build
 ```
 
-CMake locates it via `-DVTK_DIR="$(brew --prefix vtk)/lib/cmake/vtk-9.6"`.
-Currently this is only exercised by the standalone harnesses under
-`experiments/` (see [`docs/PROJECT_NOTES.md`](docs/PROJECT_NOTES.md)).
+Then point CMake at it when configuring (see [Build](#build)):
+
+```bash
+cmake --preset conan-release -DVTK_DIR="$(brew --prefix vtk)/lib/cmake/vtk-9.6"
+```
+
+> **⚠️ Architecture must match the app.** On Apple Silicon the app is **arm64**,
+> so VTK must be arm64 too. Use the arm64 Homebrew at **`/opt/homebrew`** — the
+> Intel Homebrew at `/usr/local` installs an **x86_64** VTK that will fail to
+> link with the arm64 Conan/app stack (`ld: ... required architecture` errors).
+> On an arm64 machine, `$(brew --prefix vtk)` should resolve under
+> `/opt/homebrew`; if it resolves under `/usr/local`, you're using the wrong
+> Homebrew.
+
+The configure step logs whether VTK was found (`VTK ... found — Nastran/.bdf
+support enabled`). See [`docs/PROJECT_NOTES.md`](docs/PROJECT_NOTES.md) for the
+rationale.
 
 ### Platform-specific toolchain
 
@@ -184,7 +202,8 @@ XYZ axis lines through the origin, and a QML overlay bar across the top.
 | `src/VulkanRenderer.*`   | Owns the Vulkan objects; renders the mesh + axes offscreen     |
 | `src/TrackballCamera.*`  | Orbit camera (quaternion); produces the MVP matrix            |
 | `src/Mesh.*`             | CPU mesh representation, OBJ loader, cube fallback, bounds     |
-| `src/io/NastranReader.*` | Nastran `.bdf` reader → VTK grid (not yet in the app build)    |
+| `src/io/NastranReader.*` | Nastran `.bdf` reader → VTK grid (VTK-enabled builds)         |
+| `src/io/VtkSurface.*`    | VTK grid → free-surface `MeshData` for the renderer           |
 | `shaders/`               | GLSL sources, compiled to SPIR-V via `glslc` at build time    |
 | `assets/`                | Bundled model(s) loaded at run time                           |
 | `main.qml`               | UI: the viewport, camera input, and overlay                   |

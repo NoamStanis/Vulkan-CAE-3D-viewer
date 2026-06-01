@@ -13,7 +13,8 @@ A Qt Quick + Vulkan viewer aimed at **CAE / vibroacoustics** models — *not* a
 generic 3D-graphics demo. The end goal is to view finite-element models and
 their simulation results (mode shapes, frequency-response fields), starting from
 Nastran. The graphics stack was built up in small, individually-verified steps;
-the CAE data layer is now being added on top.
+the CAE data layer now sits on top — Nastran `.bdf` geometry import is working
+and integrated (§5). Results (mode shapes, field coloring) are the next work.
 
 ### Build/runtime stack
 - **Conan 2.x** for dependencies, **CMake**, **Ninja**. Sources are
@@ -132,7 +133,7 @@ Decision history (important — the obvious paths were ruled out):
 
 ---
 
-## 5. Nastran reader (Layer 1 — done, verified in isolation)
+## 5. Nastran `.bdf` import (Layers 1 & 2 — done, integrated into the app)
 
 `src/io/NastranReader.{h,cpp}` parses a `.bdf` subset → `vtkUnstructuredGrid`.
 
@@ -147,18 +148,32 @@ unopenable/empty.
 `INCLUDE` files, **non-zero coordinate systems** (`CP`/`CORD*` — currently treated
 as basic system 0), higher-order elements (`CTETRA10`, etc.).
 
-**Verification:** standalone harness in `experiments/nastran_test/` against
-`test/data/{tet_and_shells,formats}.bdf` — all assertions pass (small/large/free
-formats, node coordinates), and the parsed grid feeds `vtkDataSetSurfaceFilter`
-correctly (Layer-2 hand-off confirmed).
+**Layer 2 — surface → renderable geometry (done):** `src/io/VtkSurface.{h,cpp}`
+runs `vtkDataSetSurfaceFilter → vtkTriangleFilter → vtkPolyDataNormals` and
+converts the resulting `vtkPolyData` into the renderer's `MeshData`
+(position+normal vertices + indices).
 
-**Not yet wired into the app or the main CMake build** — like the smoke test, it
-currently lives only in `experiments/`.
+**App integration (done):** VTK is wired into the app's `CMakeLists.txt` as an
+**optional** dependency — `find_package(VTK 9.6 QUIET …)`; when found it compiles
+the `src/io/` sources, defines `HAVE_VTK=1`, links `${VTK_LIBRARIES}`, and calls
+`vtk_module_autoinit`. Without VTK the app still builds (OBJ-only). `ViewerItem`
+dispatches by file extension (`.bdf`/`.nas`/`.dat` → Nastran when `HAVE_VTK`,
+else OBJ) with a cube fallback. The default model is `assets/model.bdf` (a
+generated 8×8×2 = 128-hex block → 194 surface verts / 384 tris).
+
+**Verified end-to-end:** standalone harness in `experiments/nastran_test/`
+(formats, node coords, converter); and **confirmed rendering in the actual app**
+— terminal logs the load (194 verts / 384 tris) and the FE surface (a rectangular
+prism) displays with working orbit/zoom/axes. This is the **first on-screen FE
+model** milestone.
+
+> **Build requirement — VTK architecture must match the app.** On Apple Silicon
+> the app is arm64, so VTK must be arm64. Use arm64 Homebrew at `/opt/homebrew`
+> (`-DVTK_DIR="/opt/homebrew/opt/vtk/lib/cmake/vtk-9.6"`), **not** the x86_64
+> Homebrew at `/usr/local` — mixing arches fails to link
+> (`ld: ... required architecture` errors). This bit us once; see §7.
 
 ### Roadmap (next)
-- **Layer 2:** convert extracted surface `vtkPolyData` → `MeshData`; add VTK to
-  the app's CMake; render a real `.bdf` through the existing pipeline. *First
-  on-screen FE model.*
 - **Layer 3:** mode shapes (deformed geometry per eigenfrequency). Results from
   `.pch`/`.f06` (text, start here) before `.op2` (binary). Prefer GPU vertex-shader
   displacement (enables animation) over CPU re-upload.
@@ -189,6 +204,14 @@ architectural rework. Multi-instance support is deferred (single-image renderer,
   empty CA trust store — **not** an outage (`curl` to the host works). Fix:
   `"/Applications/Python 3.13/Install Certificates.command"` (installs certifi's
   bundle as the default). Don't assume Conan Center is down when you see this.
+- **Two Homebrews / VTK architecture trap.** This machine has both the x86_64
+  Homebrew (`/usr/local`) and the arm64 Homebrew (`/opt/homebrew`). `brew install
+  vtk` under the Intel one yields an **x86_64** VTK that will not link the arm64
+  Conan/app stack (`ld: ... required architecture x86_64`/`arm64`). The app and
+  Conan packages are arm64-native, so install VTK via the arm64 Homebrew and
+  configure with `-DVTK_DIR="/opt/homebrew/opt/vtk/lib/cmake/vtk-9.6"`. A pure
+  VTK test can silently build x86_64 under Rosetta and pass, masking the problem
+  until VTK is combined with an arm64 dependency — verify with `lipo -info`.
 - `timeout` is not available in the shell here; use other means to bound commands.
 
 ---
