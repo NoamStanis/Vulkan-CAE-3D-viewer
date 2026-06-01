@@ -187,7 +187,8 @@ You should see a 1280×720 window showing a 3D model (with element edges overlai
 by default) on a light blue-white background, red/green/blue XYZ axis lines, and
 a QML overlay bar across the top. **Drag** to orbit; **scroll** to zoom; press
 **`E`** to cycle shaded → shaded + edges → wireframe; press **`Space`** to re-fit
-the model. The overlay buttons mirror these and toggle lighting on/off.
+the model. The overlay buttons mirror the display modes and add toggles for
+**Drag: Rotate/Pan** and **Shading: On/Off**.
 
 > **macOS:** if the app exits immediately with a Vulkan instance creation
 > error, the ICD env var (`VK_ICD_FILENAMES` / `VK_DRIVER_FILES`) was not set —
