@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Controls
+import QtQuick.Dialogs
 import VulkanCAEViewer
 
 Window {
@@ -9,6 +10,34 @@ Window {
     visible: true
     title: "Vulkan CAE Viewer — drag · scroll zoom · R/P rotate/pan · E edges · Space fit"
     color: "#141416"
+
+    // ── File → Open ─────────────────────────────────────────────────────────────
+    FileDialog {
+        id: openDialog
+        title: "Open Nastran model"
+        nameFilters: ["Nastran bulk data (*.bdf *.nas *.dat)", "All files (*)"]
+        onAccepted: viewer.openFile(selectedFile)
+    }
+
+    // Cmd/Ctrl+O also opens the dialog.
+    Shortcut {
+        sequences: [StandardKey.Open]
+        onActivated: openDialog.open()
+    }
+
+    // Surface load failures (bad file, parse error, non-VTK build for .bdf).
+    MessageDialog {
+        id: errorDialog
+        title: "Open failed"
+        buttons: MessageDialog.Ok
+    }
+    Connections {
+        target: viewer
+        function onLoadError(message) {
+            errorDialog.text = message;
+            errorDialog.open();
+        }
+    }
 
     // Mode-button labels reflect the lighting state: with shading off the
     // surface is flat, so "Shaded" reads as "Flat". Wireframe has no surface, so
@@ -43,6 +72,7 @@ Window {
     }
 
     // ── 3D Viewport ───────────────────────────────────────────────────────────
+    // Fills the window; the menu bar and overlay sit on top of it.
     ViewerItem {
         id: viewer
         anchors.fill: parent
@@ -85,10 +115,24 @@ Window {
         }
     }
 
+    // ── Menu bar ────────────────────────────────────────────────────────────────
+    MenuBar {
+        id: menuBar
+        anchors { top: parent.top; left: parent.left; right: parent.right }
+
+        Menu {
+            title: "File"
+            MenuItem {
+                text: "Open…"
+                onTriggered: openDialog.open()
+            }
+        }
+    }
+
     // ── Overlay UI (demonstrates that QML sits correctly above the Vulkan surface)
     Rectangle {
         anchors {
-            top:    parent.top
+            top:    menuBar.bottom
             left:   parent.left
             right:  parent.right
         }

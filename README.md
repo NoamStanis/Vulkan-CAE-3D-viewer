@@ -35,6 +35,8 @@ differences live in `conanfile.py` and the run-time environment.
   wireframe — toggled with the **`E`** key or the on-screen selector. For Nastran
   models the edges are true element-face edges (no triangulation diagonals).
 - **Lighting toggle** (shaded vs. flat/unlit) via the on-screen button.
+- **File → Open** (menu or **Cmd/Ctrl+O**) loads a Nastran model at runtime and
+  auto-fits the camera to it; load errors surface in a dialog.
 - OBJ model loading via tinyobjloader (`assets/`); falls back to a cube.
 - **Nastran `.bdf` finite-element models** (in VTK-enabled builds): the
   hand-written reader (`src/io/NastranReader.*`) parses GRID + CHEXA/CTETRA/

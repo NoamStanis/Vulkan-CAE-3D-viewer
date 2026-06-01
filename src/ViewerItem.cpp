@@ -8,6 +8,7 @@
 #include <QSGTexture>
 #include <QVulkanInstance>
 #include <QFileInfo>
+#include <QUrl>
 #include <QDebug>
 #include <vulkan/vulkan.h>
 
@@ -61,47 +62,22 @@ ViewerItem::ViewerItem(QQuickItem *parent)
 {
     setFlag(ItemHasContents, true);
 
-    // Load the model on the main thread (file I/O + bounds), falling back to a
-    // unit cube if the asset is missing or unreadable. The prepared MeshData is
-    // handed to the renderer when the scene graph initialises.
-    //
-    // Default model: prefer a Nastran .bdf when the build has VTK, otherwise the
-    // bundled OBJ. (A future revision exposes this as a `source` QML property.)
+    // Load the default model on the main thread. Prefer a Nastran .bdf when the
+    // build has VTK, otherwise the bundled OBJ. On failure, fall back to a cube.
 #ifdef HAVE_VTK
     const QString defaultModel = QStringLiteral(ASSET_DIR "plane.bdf");
 #else
     const QString defaultModel = QStringLiteral(ASSET_DIR "satellite.obj");
 #endif
-    try {
-        loadModelFile(defaultModel, m_mesh, m_edges);
-        qInfo() << "ViewerItem: loaded model" << defaultModel
-                << "(" << static_cast<int>(m_mesh.vertices.size()) << "verts,"
-                << static_cast<int>(m_mesh.indices.size() / 3) << "tris,"
-                << static_cast<int>(m_edges.vertexCount() / 2) << "edges )";
-    } catch (const std::exception &e) {
-        qWarning() << "ViewerItem: model load failed (" << e.what()
-                   << ") — using fallback cube";
+    if (!loadModel(defaultModel)) {
+        qWarning() << "ViewerItem: default model load failed — using fallback cube";
         m_mesh  = makeCube();
         m_edges = makeTriangleEdges(m_mesh);
+        frameAndSizeAxes();
     }
-
-    // Frame the camera to the loaded mesh's bounds so it fits on load, and size
-    // the axis gizmo so it always extends past the model.
-    const Bounds b = m_mesh.bounds();
-    float c[3];
-    b.center(c);
-    m_modelCenter = QVector3D(c[0], c[1], c[2]);
-    m_modelRadius = b.radius() > 0.0f ? b.radius() : 1.0f;
-    m_camera.frame(m_modelCenter, m_modelRadius);
-
-    // Axes emanate from the origin, so size them to clear the model's farthest
-    // extent from the origin (not just its center), then add margin so the tips
-    // always poke out beyond the geometry regardless of the model's placement.
-    float maxFromOrigin = 0.0f;
-    for (int i = 0; i < 3; ++i)
-        maxFromOrigin = std::max(maxFromOrigin,
-                                 std::max(std::abs(b.min[i]), std::abs(b.max[i])));
-    m_axisLength = (maxFromOrigin > 0.0f ? maxFromOrigin : m_modelRadius) * 1.5f;
+    // The initial geometry is uploaded at scene-graph init, not via the
+    // pending-swap path, so clear the flag loadModel() sets.
+    m_geometryChanged = false;
 
     // These signals are emitted on the render thread, so use DirectConnection.
     connect(this, &QQuickItem::windowChanged, this, [this](QQuickWindow *w) {
@@ -189,6 +165,17 @@ QSGNode *ViewerItem::updatePaintNode(QSGNode *oldNode, UpdatePaintNodeData *)
     if (m_sizeChanged) {
         m_renderer->resize(m_pendingSize);
         m_sizeChanged = false;
+    }
+
+    // Apply newly opened geometry (File → Open). Safe here: the main thread is
+    // blocked during updatePaintNode, so m_mesh/m_edges aren't being mutated.
+    if (m_geometryChanged) {
+        try {
+            m_renderer->setGeometry(m_mesh, m_edges, m_axisLength);
+        } catch (const std::exception &e) {
+            qWarning() << "ViewerItem: setGeometry failed:" << e.what();
+        }
+        m_geometryChanged = false;
     }
 
     // Push the current camera matrix. We are on the render thread here, but the
@@ -333,4 +320,56 @@ void ViewerItem::fitToModel()
     // doesn't snap the view back to the default orientation.
     m_camera.frame(m_modelCenter, m_modelRadius, /*resetOrientation=*/false);
     update();
+}
+
+void ViewerItem::frameAndSizeAxes()
+{
+    const Bounds b = m_mesh.bounds();
+    float c[3];
+    b.center(c);
+    m_modelCenter = QVector3D(c[0], c[1], c[2]);
+    m_modelRadius = b.radius() > 0.0f ? b.radius() : 1.0f;
+    m_camera.frame(m_modelCenter, m_modelRadius);  // reset orientation on (re)load
+
+    // Axes emanate from the origin, so size them to clear the model's farthest
+    // extent from the origin (not just its center), plus margin.
+    float maxFromOrigin = 0.0f;
+    for (int i = 0; i < 3; ++i)
+        maxFromOrigin = std::max(maxFromOrigin,
+                                 std::max(std::abs(b.min[i]), std::abs(b.max[i])));
+    m_axisLength = (maxFromOrigin > 0.0f ? maxFromOrigin : m_modelRadius) * 1.5f;
+}
+
+bool ViewerItem::loadModel(const QString &path, QString *errorOut)
+{
+    MeshData mesh;
+    EdgeData edges;
+    try {
+        loadModelFile(path, mesh, edges);
+    } catch (const std::exception &e) {
+        if (errorOut) *errorOut = QString::fromUtf8(e.what());
+        return false;
+    }
+
+    m_mesh  = std::move(mesh);
+    m_edges = std::move(edges);
+    frameAndSizeAxes();
+    m_geometryChanged = true;  // upload to the renderer on the next frame
+
+    qInfo() << "ViewerItem: loaded model" << path
+            << "(" << static_cast<int>(m_mesh.vertices.size()) << "verts,"
+            << static_cast<int>(m_mesh.indices.size() / 3) << "tris,"
+            << static_cast<int>(m_edges.vertexCount() / 2) << "edges )";
+    update();
+    return true;
+}
+
+void ViewerItem::openFile(const QUrl &url)
+{
+    const QString path = url.isLocalFile() ? url.toLocalFile() : url.toString();
+    QString err;
+    if (!loadModel(path, &err)) {
+        qWarning() << "ViewerItem: open failed for" << path << ":" << err;
+        emit loadError(QStringLiteral("Could not open %1:\n%2").arg(path, err));
+    }
 }

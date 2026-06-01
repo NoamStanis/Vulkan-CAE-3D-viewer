@@ -94,10 +94,21 @@ private:
     TrackballCamera m_camera;
 
     // Mesh, edges, and axis length are prepared on the main thread (file I/O,
-    // bounds) and handed to the renderer when the scene graph initialises.
+    // bounds) and handed to the renderer at scene-graph init, or on the next
+    // frame when m_geometryChanged is set (runtime File → Open).
     MeshData m_mesh;
     EdgeData m_edges;
-    float    m_axisLength = 1.0f;
+    float    m_axisLength    = 1.0f;
+    bool     m_geometryChanged = false;
+
+    // Load a model file into m_mesh/m_edges and re-frame the camera. Runs on the
+    // main thread; sets m_geometryChanged so the renderer picks it up. Returns
+    // false (and leaves current geometry intact) on failure.
+    bool loadModel(const QString &path, QString *errorOut = nullptr);
+
+    // Frame the camera to the current m_mesh bounds and size the axis gizmo to
+    // clear the model. Updates m_modelCenter/m_modelRadius/m_axisLength.
+    void frameAndSizeAxes();
 
     // Display mode + lighting set on the main thread; read by the render thread
     // in updatePaintNode (main thread blocked there), like the camera matrix.
