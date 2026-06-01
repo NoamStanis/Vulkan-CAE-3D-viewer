@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Mesh.h"
+#include "DisplayMode.h"
 
 #include <vulkan/vulkan.h>
 #include <QSize>
@@ -40,15 +41,23 @@ public:
     VulkanRenderer(const VulkanRenderer &) = delete;
     VulkanRenderer &operator=(const VulkanRenderer &) = delete;
 
-    // `mesh` is uploaded as the object to render; `axisLength` sizes the XYZ
+    // `mesh` is uploaded as the object to render; `edges` are the element-edge
+    // line segments for the overlay (may be empty); `axisLength` sizes the XYZ
     // orientation gizmo (typically the mesh's bounding radius).
-    void init(const QSize &size, const MeshData &mesh, float axisLength);
+    void init(const QSize &size, const MeshData &mesh,
+              const EdgeData &edges, float axisLength);
     void resize(const QSize &size);
     void render();
 
     // Set the model-view-projection matrix used for the next render().
     // Called on the render thread (from updatePaintNode) before render().
     void setMvp(const QMatrix4x4 &mvp) { m_mvp = mvp; }
+
+    // Surface/edge display mode for the next render(). Render-thread call.
+    void setDisplayMode(DisplayMode mode) { m_displayMode = mode; }
+
+    // Toggle diffuse lighting on the surface (false = flat/unlit). Render thread.
+    void setLit(bool lit) { m_lit = lit; }
 
     // The image is in VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL after render().
     VkImage     colorImage()  const { return m_colorImage; }
@@ -71,6 +80,8 @@ private:
     void createDescriptors();
     void createAxesPipeline();
     void createAxesBuffer(float length);
+    void createEdgesPipeline();
+    void createEdgesBuffer(const EdgeData &edges);
 
     uint32_t findMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties) const;
     VkShaderModule loadShaderModule(const QString &spvPath) const;
@@ -136,6 +147,16 @@ private:
     VkBuffer       m_axesBuffer         = VK_NULL_HANDLE;
     VkDeviceMemory m_axesBufferMemory   = VK_NULL_HANDLE;
     uint32_t       m_axesVertexCount    = 0;
+
+    // Element-edge overlay: a line-topology pipeline over a position-only buffer,
+    // depth-biased so edges sit on top of the surface without z-fighting.
+    VkPipeline     m_edgesPipeline      = VK_NULL_HANDLE;
+    VkBuffer       m_edgesBuffer        = VK_NULL_HANDLE;
+    VkDeviceMemory m_edgesBufferMemory  = VK_NULL_HANDLE;
+    uint32_t       m_edgesVertexCount   = 0;
+
+    DisplayMode    m_displayMode        = DisplayMode::Shaded;
+    bool           m_lit                = true;
 
     // Uniform buffer (MVP), host-visible and persistently mapped.
     VkBuffer              m_uniformBuffer       = VK_NULL_HANDLE;

@@ -21,4 +21,9 @@ namespace VtkSurface {
 // Throws std::runtime_error if the grid yields no surface triangles.
 MeshData toMeshData(vtkUnstructuredGrid *grid);
 
+// Extract the true element-face edges of `grid` as a line-list EdgeData. Edges
+// are taken from the surface *before* triangulation, so quad faces yield 4 edges
+// (no triangulation diagonals). Returns empty EdgeData if there are no edges.
+EdgeData extractEdges(vtkUnstructuredGrid *grid);
+
 } // namespace VtkSurface

@@ -39,6 +39,12 @@ VulkanRenderer::~VulkanRenderer()
         vkDestroyFence(m_device, m_fence, nullptr);
     if (m_commandPool != VK_NULL_HANDLE)
         vkDestroyCommandPool(m_device, m_commandPool, nullptr);
+    if (m_edgesBuffer != VK_NULL_HANDLE)
+        vkDestroyBuffer(m_device, m_edgesBuffer, nullptr);
+    if (m_edgesBufferMemory != VK_NULL_HANDLE)
+        vkFreeMemory(m_device, m_edgesBufferMemory, nullptr);
+    if (m_edgesPipeline != VK_NULL_HANDLE)
+        vkDestroyPipeline(m_device, m_edgesPipeline, nullptr);
     if (m_axesBuffer != VK_NULL_HANDLE)
         vkDestroyBuffer(m_device, m_axesBuffer, nullptr);
     if (m_axesBufferMemory != VK_NULL_HANDLE)
@@ -80,7 +86,8 @@ VulkanRenderer::~VulkanRenderer()
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-void VulkanRenderer::init(const QSize &size, const MeshData &mesh, float axisLength)
+void VulkanRenderer::init(const QSize &size, const MeshData &mesh,
+                          const EdgeData &edges, float axisLength)
 {
     m_size = size;
 
@@ -92,11 +99,13 @@ void VulkanRenderer::init(const QSize &size, const MeshData &mesh, float axisLen
     createUniformBuffer();   // descriptor set layout used by the pipeline layout
     createPipeline();
     createAxesPipeline();    // shares the pipeline layout / MVP descriptor
+    createEdgesPipeline();   // shares the pipeline layout / MVP descriptor
     createDescriptors();     // pool + set, bound to the uniform buffer
     createFramebuffer();
 
     createMeshBuffers(mesh);
     createAxesBuffer(axisLength > 0.0f ? axisLength : 1.0f);
+    createEdgesBuffer(edges);
 }
 
 void VulkanRenderer::resize(const QSize &size)
@@ -143,7 +152,7 @@ void VulkanRenderer::render()
     // ── Render pass ───────────────────────────────────────────────────────────
     // Clear values are indexed by attachment: [0] = color, [1] = depth.
     std::array<VkClearValue, 2> clearValues{};
-    clearValues[0].color        = {{0.08f, 0.08f, 0.10f, 1.0f}}; // near-black background
+    clearValues[0].color        = {{0.90f, 0.93f, 0.97f, 1.0f}}; // light blue-white; keeps dark wireframe edges legible
     clearValues[1].depthStencil = {1.0f, 0};                     // far plane
 
     VkRenderPassBeginInfo rpInfo{};
@@ -178,12 +187,29 @@ void VulkanRenderer::render()
     vkCmdBindDescriptorSets(m_commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
                             m_pipelineLayout, 0, 1, &m_descriptorSet, 0, nullptr);
 
-    VkBuffer     vertexBuffers[] = {m_vertexBuffer};
-    VkDeviceSize offsets[]       = {0};
-    vkCmdBindVertexBuffers(m_commandBuffer, 0, 1, vertexBuffers, offsets);
-    vkCmdBindIndexBuffer(m_commandBuffer, m_indexBuffer, 0, VK_INDEX_TYPE_UINT32);
+    // ── Shaded surface (skipped in wireframe-only mode) ───────────────────────
+    if (m_displayMode != DisplayMode::Wireframe) {
+        vkCmdBindPipeline(m_commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipeline);
+        const uint32_t lit = m_lit ? 1u : 0u;
+        vkCmdPushConstants(m_commandBuffer, m_pipelineLayout,
+                           VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(lit), &lit);
+        VkBuffer     vertexBuffers[] = {m_vertexBuffer};
+        VkDeviceSize offsets[]       = {0};
+        vkCmdBindVertexBuffers(m_commandBuffer, 0, 1, vertexBuffers, offsets);
+        vkCmdBindIndexBuffer(m_commandBuffer, m_indexBuffer, 0, VK_INDEX_TYPE_UINT32);
+        vkCmdDrawIndexed(m_commandBuffer, m_indexCount, 1, 0, 0, 0);
+    }
 
-    vkCmdDrawIndexed(m_commandBuffer, m_indexCount, 1, 0, 0, 0);
+    // ── Element edges (shown in ShadedEdges / Wireframe) ──────────────────────
+    if (m_edgesVertexCount > 0 &&
+        (m_displayMode == DisplayMode::ShadedEdges ||
+         m_displayMode == DisplayMode::Wireframe)) {
+        vkCmdBindPipeline(m_commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_edgesPipeline);
+        VkBuffer     edgeBuffers[] = {m_edgesBuffer};
+        VkDeviceSize edgeOffsets[] = {0};
+        vkCmdBindVertexBuffers(m_commandBuffer, 0, 1, edgeBuffers, edgeOffsets);
+        vkCmdDraw(m_commandBuffer, m_edgesVertexCount, 1, 0, 0);
+    }
 
     // ── XYZ axis gizmo ────────────────────────────────────────────────────────
     // Same MVP descriptor (already bound); just switch pipeline + vertex buffer.
@@ -734,10 +760,20 @@ void VulkanRenderer::createPipeline()
     dynamicState.dynamicStateCount = static_cast<uint32_t>(dynamicStates.size());
     dynamicState.pDynamicStates    = dynamicStates.data();
 
+    // Push constant for the lighting toggle (fragment stage). The layout is
+    // shared by the axes/edges pipelines too; their shaders simply don't declare
+    // the push constant, which is permitted.
+    VkPushConstantRange pushRange{};
+    pushRange.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    pushRange.offset     = 0;
+    pushRange.size       = sizeof(uint32_t);
+
     VkPipelineLayoutCreateInfo layoutInfo{};
-    layoutInfo.sType          = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-    layoutInfo.setLayoutCount = 1;
-    layoutInfo.pSetLayouts    = &m_descriptorSetLayout;
+    layoutInfo.sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    layoutInfo.setLayoutCount         = 1;
+    layoutInfo.pSetLayouts            = &m_descriptorSetLayout;
+    layoutInfo.pushConstantRangeCount = 1;
+    layoutInfo.pPushConstantRanges    = &pushRange;
     VK_CHECK(vkCreatePipelineLayout(m_device, &layoutInfo, nullptr, &m_pipelineLayout),
              "vkCreatePipelineLayout");
 
@@ -887,17 +923,151 @@ void VulkanRenderer::createAxesPipeline()
 
 void VulkanRenderer::createAxesBuffer(float length)
 {
-    // Three lines from the origin: +X red, +Y green, +Z blue.
+    // Three lines from the origin: +X red, +Y green, +Z blue. Colors are
+    // darkened/saturated so they stay legible against the light background —
+    // pure green especially washes out, so it uses a deep green.
+    constexpr float rx[3] = {0.85f, 0.10f, 0.10f}; // red
+    constexpr float gy[3] = {0.00f, 0.55f, 0.10f}; // deep green
+    constexpr float bz[3] = {0.10f, 0.25f, 0.85f}; // blue
     const AxisVertex verts[] = {
-        {{0, 0, 0}, {1, 0, 0}}, {{length, 0, 0}, {1, 0, 0}},
-        {{0, 0, 0}, {0, 1, 0}}, {{0, length, 0}, {0, 1, 0}},
-        {{0, 0, 0}, {0, 0, 1}}, {{0, 0, length}, {0, 0, 1}},
+        {{0, 0, 0}, {rx[0], rx[1], rx[2]}}, {{length, 0, 0}, {rx[0], rx[1], rx[2]}},
+        {{0, 0, 0}, {gy[0], gy[1], gy[2]}}, {{0, length, 0}, {gy[0], gy[1], gy[2]}},
+        {{0, 0, 0}, {bz[0], bz[1], bz[2]}}, {{0, 0, length}, {bz[0], bz[1], bz[2]}},
     };
     m_axesVertexCount = static_cast<uint32_t>(sizeof(verts) / sizeof(verts[0]));
 
     uploadToDeviceLocalBuffer(verts, sizeof(verts),
                               VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
                               m_axesBuffer, m_axesBufferMemory);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Element-edge pipeline + buffer
+//
+// Position-only vertices (vec3) drawn as a line list. Depth-tested so hidden
+// edges are occluded, but with a negative depth bias so visible edges sit on top
+// of the coincident surface instead of z-fighting with it. Shares the MVP
+// pipeline layout / descriptor.
+// ─────────────────────────────────────────────────────────────────────────────
+void VulkanRenderer::createEdgesPipeline()
+{
+    VkShaderModule vertModule = loadShaderModule(QStringLiteral(SHADER_DIR "edges.vert.spv"));
+    VkShaderModule fragModule = loadShaderModule(QStringLiteral(SHADER_DIR "edges.frag.spv"));
+
+    std::array<VkPipelineShaderStageCreateInfo, 2> stages{};
+    stages[0].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    stages[0].stage  = VK_SHADER_STAGE_VERTEX_BIT;
+    stages[0].module = vertModule;
+    stages[0].pName  = "main";
+    stages[1].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    stages[1].stage  = VK_SHADER_STAGE_FRAGMENT_BIT;
+    stages[1].module = fragModule;
+    stages[1].pName  = "main";
+
+    VkVertexInputBindingDescription binding{};
+    binding.binding   = 0;
+    binding.stride    = sizeof(float) * 3;
+    binding.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+
+    VkVertexInputAttributeDescription attr{};
+    attr.location = 0;
+    attr.binding  = 0;
+    attr.format   = VK_FORMAT_R32G32B32_SFLOAT;
+    attr.offset   = 0;
+
+    VkPipelineVertexInputStateCreateInfo vertexInput{};
+    vertexInput.sType                           = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+    vertexInput.vertexBindingDescriptionCount   = 1;
+    vertexInput.pVertexBindingDescriptions      = &binding;
+    vertexInput.vertexAttributeDescriptionCount = 1;
+    vertexInput.pVertexAttributeDescriptions    = &attr;
+
+    VkPipelineInputAssemblyStateCreateInfo inputAssembly{};
+    inputAssembly.sType    = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+    inputAssembly.topology = VK_PRIMITIVE_TOPOLOGY_LINE_LIST;
+
+    VkPipelineViewportStateCreateInfo viewportState{};
+    viewportState.sType         = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+    viewportState.viewportCount = 1;
+    viewportState.scissorCount  = 1;
+
+    VkPipelineRasterizationStateCreateInfo rasterizer{};
+    rasterizer.sType                   = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+    rasterizer.polygonMode             = VK_POLYGON_MODE_FILL;
+    rasterizer.cullMode                = VK_CULL_MODE_NONE;
+    rasterizer.frontFace               = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+    rasterizer.lineWidth               = 1.0f;
+    // Pull edges slightly toward the camera in depth so they render on top of
+    // the surface they lie on rather than z-fighting.
+    rasterizer.depthBiasEnable         = VK_TRUE;
+    rasterizer.depthBiasConstantFactor = -1.0f;
+    rasterizer.depthBiasSlopeFactor    = -1.0f;
+
+    VkPipelineMultisampleStateCreateInfo multisampling{};
+    multisampling.sType                = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+    multisampling.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+
+    VkPipelineDepthStencilStateCreateInfo depthStencil{};
+    depthStencil.sType            = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+    depthStencil.depthTestEnable  = VK_TRUE;
+    depthStencil.depthWriteEnable = VK_TRUE;
+    depthStencil.depthCompareOp   = VK_COMPARE_OP_LESS_OR_EQUAL;
+
+    VkPipelineColorBlendAttachmentState blendAttachment{};
+    blendAttachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT
+                                   | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+    blendAttachment.blendEnable    = VK_FALSE;
+
+    VkPipelineColorBlendStateCreateInfo colorBlend{};
+    colorBlend.sType           = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+    colorBlend.attachmentCount = 1;
+    colorBlend.pAttachments    = &blendAttachment;
+
+    // Viewport, scissor, and depth bias are all dynamic-friendly; we set the
+    // first two per-frame and bake the bias into the pipeline above.
+    std::array<VkDynamicState, 2> dynamicStates = {
+        VK_DYNAMIC_STATE_VIEWPORT,
+        VK_DYNAMIC_STATE_SCISSOR
+    };
+    VkPipelineDynamicStateCreateInfo dynamicState{};
+    dynamicState.sType             = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+    dynamicState.dynamicStateCount = static_cast<uint32_t>(dynamicStates.size());
+    dynamicState.pDynamicStates    = dynamicStates.data();
+
+    VkGraphicsPipelineCreateInfo pipelineInfo{};
+    pipelineInfo.sType               = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+    pipelineInfo.stageCount          = static_cast<uint32_t>(stages.size());
+    pipelineInfo.pStages             = stages.data();
+    pipelineInfo.pVertexInputState   = &vertexInput;
+    pipelineInfo.pInputAssemblyState = &inputAssembly;
+    pipelineInfo.pViewportState      = &viewportState;
+    pipelineInfo.pRasterizationState = &rasterizer;
+    pipelineInfo.pMultisampleState   = &multisampling;
+    pipelineInfo.pDepthStencilState  = &depthStencil;
+    pipelineInfo.pColorBlendState    = &colorBlend;
+    pipelineInfo.pDynamicState       = &dynamicState;
+    pipelineInfo.layout              = m_pipelineLayout;
+    pipelineInfo.renderPass          = m_renderPass;
+    pipelineInfo.subpass             = 0;
+
+    VK_CHECK(vkCreateGraphicsPipelines(m_device, VK_NULL_HANDLE, 1,
+                                       &pipelineInfo, nullptr, &m_edgesPipeline),
+             "vkCreateGraphicsPipelines (edges)");
+
+    vkDestroyShaderModule(m_device, vertModule, nullptr);
+    vkDestroyShaderModule(m_device, fragModule, nullptr);
+}
+
+void VulkanRenderer::createEdgesBuffer(const EdgeData &edges)
+{
+    m_edgesVertexCount = static_cast<uint32_t>(edges.vertexCount());
+    if (m_edgesVertexCount == 0)
+        return;
+
+    uploadToDeviceLocalBuffer(edges.positions.data(),
+                              edges.positions.size() * sizeof(float),
+                              VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+                              m_edgesBuffer, m_edgesBufferMemory);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

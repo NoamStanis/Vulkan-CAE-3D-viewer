@@ -3,7 +3,8 @@
 #include <algorithm>
 #include <cmath>
 
-void TrackballCamera::frame(const QVector3D &target, float boundingRadius)
+void TrackballCamera::frame(const QVector3D &target, float boundingRadius,
+                            bool resetOrientation)
 {
     m_target = target;
 
@@ -13,7 +14,8 @@ void TrackballCamera::frame(const QVector3D &target, float boundingRadius)
     m_distance    = fit * 1.3f;
     m_minDistance = std::max(0.01f, boundingRadius * 0.05f);
     m_maxDistance = fit * 20.0f;
-    m_orientation = QQuaternion();
+    if (resetOrientation)
+        m_orientation = QQuaternion();
 }
 
 void TrackballCamera::rotate(float dxNorm, float dyNorm)
@@ -38,6 +40,21 @@ void TrackballCamera::zoom(float delta)
     // Exponential zoom so each notch feels proportional at any distance.
     m_distance *= std::pow(0.9f, delta);
     m_distance  = std::clamp(m_distance, m_minDistance, m_maxDistance);
+}
+
+void TrackballCamera::pan(float dxNorm, float dyNorm)
+{
+    // Move the target within the camera's view plane. Right/up come from the
+    // current orientation (same basis used in viewProjection). Scale by distance
+    // so a full-drag shifts roughly the visible extent regardless of zoom.
+    const QVector3D right = m_orientation.rotatedVector(QVector3D(1, 0, 0));
+    const QVector3D up    = m_orientation.rotatedVector(QVector3D(0, 1, 0));
+
+    const float scale = m_distance;
+    // Dragging right moves the view right (target moves left), and dragging up
+    // moves the view up — matching the cursor.
+    m_target += right * (-dxNorm * scale);
+    m_target += up    * ( dyNorm * scale);
 }
 
 QMatrix4x4 TrackballCamera::viewProjection(float aspect) const

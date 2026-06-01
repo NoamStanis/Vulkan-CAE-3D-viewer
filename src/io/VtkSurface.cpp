@@ -3,6 +3,7 @@
 #include <vtkDataSetSurfaceFilter.h>
 #include <vtkTriangleFilter.h>
 #include <vtkPolyDataNormals.h>
+#include <vtkExtractEdges.h>
 #include <vtkPolyData.h>
 #include <vtkCellArray.h>
 #include <vtkPointData.h>
@@ -88,6 +89,46 @@ MeshData toMeshData(vtkUnstructuredGrid *grid)
     }
 
     return mesh;
+}
+
+EdgeData extractEdges(vtkUnstructuredGrid *grid)
+{
+    EdgeData edges;
+    if (!grid)
+        return edges;
+
+    // Surface BEFORE triangulation keeps original element faces, so vtkExtractEdges
+    // yields true element-face edges (a quad → 4 edges, no triangulation diagonal).
+    auto surface = vtkSmartPointer<vtkDataSetSurfaceFilter>::New();
+    surface->SetInputData(grid);
+
+    auto extract = vtkSmartPointer<vtkExtractEdges>::New();
+    extract->SetInputConnection(surface->GetOutputPort());
+    extract->Update();
+
+    vtkPolyData *poly = extract->GetOutput();
+    auto lines = poly->GetLines();
+    if (!lines || poly->GetNumberOfLines() == 0)
+        return edges;
+
+    edges.positions.reserve(static_cast<size_t>(poly->GetNumberOfLines()) * 6);
+
+    lines->InitTraversal();
+    auto idList = vtkSmartPointer<vtkIdList>::New();
+    while (lines->GetNextCell(idList)) {
+        // Each edge cell is a polyline; emit consecutive point pairs as segments
+        // so any multi-point lines still render as a line list.
+        for (vtkIdType k = 0; k + 1 < idList->GetNumberOfIds(); ++k) {
+            double p0[3], p1[3];
+            poly->GetPoint(idList->GetId(k),     p0);
+            poly->GetPoint(idList->GetId(k + 1), p1);
+            for (double c : {p0[0], p0[1], p0[2]})
+                edges.positions.push_back(static_cast<float>(c));
+            for (double c : {p1[0], p1[1], p1[2]})
+                edges.positions.push_back(static_cast<float>(c));
+        }
+    }
+    return edges;
 }
 
 } // namespace VtkSurface

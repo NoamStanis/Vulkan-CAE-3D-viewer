@@ -31,8 +31,8 @@ and integrated (§5). Results (mode shapes, field coloring) are the next work.
 
 The viewer renders **off-screen** and composites the result into QML:
 
-1. `VulkanRenderer` (render thread) draws the mesh + axis gizmo into an offscreen
-   `VkImage` (color + depth).
+1. `VulkanRenderer` (render thread) draws the mesh, element edges, and axis gizmo
+   into an offscreen `VkImage` (color + depth).
 2. The image is wrapped as a `QSGTexture` via
    `QNativeInterface::QSGVulkanTexture::fromNative` and placed in a
    `QSGSimpleTextureNode`.
@@ -73,6 +73,35 @@ Each step was built and confirmed to build/run before the next.
 5. **OBJ loading (tinyobjloader) + XYZ axis gizmo.** Camera frames to the loaded
    mesh's bounds. Axes are a second line-topology pipeline sharing the MVP
    descriptor, depth-tested so they occlude correctly.
+6. **Element-edge display (3 modes) + view controls.** `Shaded` / `ShadedEdges`
+   / `Wireframe` (`src/DisplayMode.h`), toggled by the `E` key and an on-screen
+   selector (kept in sync via a `displayMode` Q_PROPERTY). A third line-list
+   pipeline, sharing the MVP descriptor, with a **negative depth bias** so edges
+   sit on the surface without z-fighting. Edge geometry: for Nastran, true
+   element-face edges via `vtkExtractEdges` on the pre-triangulation surface (no
+   diagonals); for OBJ, de-duplicated triangle edges (`makeTriangleEdges`).
+   Default mode is `ShadedEdges`. The render-pass clear color is a **light
+   blue-white** (`0.90, 0.93, 0.97`) so dark edges stay legible in wireframe.
+   Also added in this step:
+   - **Lighting toggle** (`lit` Q_PROPERTY + on-screen button): a 1-word
+     fragment-shader **push constant** (`uint lit`) selects diffuse vs. flat
+     solid color. The push-constant range lives on the shared pipeline layout;
+     the axes/edges shaders simply don't declare it (allowed). The mode-button
+     labels are reactive to `lit` — "Shaded"/"Shaded + Edges" become
+     "Flat"/"Flat + Edges" when shading is off ("Wireframe" is unaffected).
+   - **`Space` = fit to model** (`fitToModel()` invokable): re-centers/re-zooms
+     to the stored model bounds (`m_modelCenter`/`m_modelRadius`) while
+     **preserving the current rotation**. `TrackballCamera::frame()` takes a
+     `resetOrientation` flag — true on load (default view), false for fit.
+   - **Axis colors** are darkened/saturated (deep green especially) so they stay
+     legible against the light background; pure green washed out.
+   - **Pan vs. rotate toggle** (on-screen "Drag: Rotate/Pan" button → QML
+     `panMode`): left-drag routes to `ViewerItem::pan()` or `orbit()`.
+     `TrackballCamera::pan()` shifts the target in the view plane (right/up from
+     orientation), scaled by distance so it feels consistent at any zoom.
+   - **Axis sizing**: axes are sized to the model's farthest extent *from the
+     origin* (not just its center) × 1.5, so they always poke out past the
+     geometry regardless of where the model sits relative to the origin.
 
 ### Known deferred graphics simplifications
 - **Single `m_colorImage` + per-frame blocking `vkWaitForFences`** on the render
@@ -174,9 +203,13 @@ model** milestone.
 > (`ld: ... required architecture` errors). This bit us once; see §7.
 
 ### Roadmap (next)
+- **Element-edge display:** DONE (see §3 step 6) — chosen as a self-contained
+  step before results work, to make the FE mesh inspectable.
 - **Layer 3:** mode shapes (deformed geometry per eigenfrequency). Results from
   `.pch`/`.f06` (text, start here) before `.op2` (binary). Prefer GPU vertex-shader
-  displacement (enables animation) over CPU re-upload.
+  displacement (enables animation) over CPU re-upload. **Test data:** generate
+  synthetic results (e.g. an analytic plate mode) on the existing mesh rather
+  than requiring a real solver file.
 - **Layer 4:** scalar-field coloring (SPL/pressure/displacement) via colormap —
   prefer a 1D colormap texture sampled in the fragment shader from a per-vertex
   scalar (interactive range/colormap) over baked vertex colors. Add legend +
@@ -228,3 +261,9 @@ architectural rework. Multi-instance support is deferred (single-image renderer,
 | CAE: first format | Nastran `.bdf` | Dominant in the field |
 | CAE: library | **VTK, non-Conan, headless** | Not on Conan Center; core VTK can't parse `.bdf`; use it for surface extraction/colormaps/VTU only |
 | Nastran parsing | Hand-written | VTK won't do it; keeps control + lean parse |
+| Edge display | 3 modes, `E` key + buttons | Inspect FE mesh; depth-biased line pipeline reuses axis-gizmo pattern |
+| Edge source | `vtkExtractEdges` pre-triangulation | True element-face edges (no triangulation diagonals) |
+| Lighting toggle | Fragment push constant (`uint lit`) | One flag, no extra pipeline/descriptor; shared layout |
+| Axis length | Farthest extent from origin × 1.5 | Axes always clear the model regardless of placement |
+| Results test data | Synthetic generation | Unblocks Layers 3–4 without needing a real solver output file |
+| Background color | Light blue-white | Keeps dark wireframe edges legible |

@@ -26,8 +26,14 @@ differences live in `conanfile.py` and the run-time environment.
 - Vulkan-rendered viewport composited into QML (offscreen `VkImage` →
   `QSGTexture`), validated threading model (render thread vs. main thread).
 - Indexed mesh rendering with a depth buffer and per-vertex lit shading.
-- Trackball camera: **drag** to orbit, **scroll** to zoom; framed to the model.
-- XYZ axis gizmo (red/green/blue) for orientation.
+- Trackball camera: **drag** to orbit (or pan — toggle via the on-screen
+  **Drag: Rotate/Pan** button), **scroll** to zoom; **`Space`** re-fits the
+  camera to the model.
+- XYZ axis gizmo (red/green/blue), sized to extend past the model.
+- **Element-edge display** with three modes — shaded, shaded + edges, and
+  wireframe — toggled with the **`E`** key or the on-screen selector. For Nastran
+  models the edges are true element-face edges (no triangulation diagonals).
+- **Lighting toggle** (shaded vs. flat/unlit) via the on-screen button.
 - OBJ model loading via tinyobjloader (`assets/`); falls back to a cube.
 - **Nastran `.bdf` finite-element models** (in VTK-enabled builds): the
   hand-written reader (`src/io/NastranReader.*`) parses GRID + CHEXA/CTETRA/
@@ -177,9 +183,11 @@ build\Release\generators\conanrun.bat
 build\Release\VulkanCAEViewerApp.exe
 ```
 
-You should see a 1280×720 window showing a shaded 3D model with red/green/blue
-XYZ axis lines through the origin, and a QML overlay bar across the top.
-**Drag** with the left mouse button to orbit the camera; **scroll** to zoom.
+You should see a 1280×720 window showing a 3D model (with element edges overlaid
+by default) on a light blue-white background, red/green/blue XYZ axis lines, and
+a QML overlay bar across the top. **Drag** to orbit; **scroll** to zoom; press
+**`E`** to cycle shaded → shaded + edges → wireframe; press **`Space`** to re-fit
+the model. The overlay buttons mirror these and toggle lighting on/off.
 
 > **macOS:** if the app exits immediately with a Vulkan instance creation
 > error, the ICD env var (`VK_ICD_FILENAMES` / `VK_DRIVER_FILES`) was not set —
@@ -199,11 +207,12 @@ XYZ axis lines through the origin, and a QML overlay bar across the top.
 | `CMakeLists.txt`         | Build definition; compiles shaders and the QML module         |
 | `src/main.cpp`           | App entry point; forces the Vulkan RHI backend                |
 | `src/ViewerItem.*`       | `QQuickItem` that drives the renderer and wraps its output     |
-| `src/VulkanRenderer.*`   | Owns the Vulkan objects; renders the mesh + axes offscreen     |
+| `src/VulkanRenderer.*`   | Owns the Vulkan objects; renders mesh + edges + axes offscreen |
 | `src/TrackballCamera.*`  | Orbit camera (quaternion); produces the MVP matrix            |
-| `src/Mesh.*`             | CPU mesh representation, OBJ loader, cube fallback, bounds     |
+| `src/Mesh.*`             | CPU mesh: OBJ loader, cube fallback, bounds, triangle edges    |
+| `src/DisplayMode.h`      | Shaded / shaded+edges / wireframe mode enum (shared)          |
 | `src/io/NastranReader.*` | Nastran `.bdf` reader → VTK grid (VTK-enabled builds)         |
-| `src/io/VtkSurface.*`    | VTK grid → free-surface `MeshData` for the renderer           |
+| `src/io/VtkSurface.*`    | VTK grid → free-surface `MeshData` + element edges            |
 | `shaders/`               | GLSL sources, compiled to SPIR-V via `glslc` at build time    |
 | `assets/`                | Bundled model(s) loaded at run time                           |
 | `main.qml`               | UI: the viewport, camera input, and overlay                   |

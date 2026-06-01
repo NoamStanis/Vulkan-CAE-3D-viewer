@@ -87,6 +87,23 @@ struct MeshData
     Bounds bounds() const;
 };
 
+// Line-segment geometry for the element-edge overlay: a flat list of float
+// triples, two consecutive positions per edge (line-list topology). Empty when
+// no edges are available (e.g. an unsupported source).
+struct EdgeData
+{
+    std::vector<float> positions;  // 3 floats per endpoint, 6 per edge
+
+    size_t vertexCount() const { return positions.size() / 3; }
+    bool   empty()       const { return positions.empty(); }
+};
+
+// Element edges of a triangle mesh: every triangle edge, de-duplicated. Used for
+// OBJ meshes (which have no FE element faces); for Nastran the edges come from
+// VtkSurface::extractEdges instead (true element-face edges, no triangulation
+// diagonals).
+EdgeData makeTriangleEdges(const MeshData &mesh);
+
 // A unit cube centred at the origin, with per-face normals (24 vertices so each
 // face gets correct flat normals). Used as a fallback when no mesh is loaded.
 MeshData makeCube();

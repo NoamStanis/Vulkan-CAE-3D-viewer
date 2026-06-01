@@ -45,6 +45,8 @@ set(SHADER_SOURCES
     ${SHADER_SOURCE_DIR}/mesh.frag
     ${SHADER_SOURCE_DIR}/axes.vert
     ${SHADER_SOURCE_DIR}/axes.frag
+    ${SHADER_SOURCE_DIR}/edges.vert
+    ${SHADER_SOURCE_DIR}/edges.frag
 )
 
 set(SHADER_BINARIES "")
@@ -78,6 +80,7 @@ qt_add_executable(VulkanCAEViewerApp WIN32
     src/Mesh.h
     src/TrackballCamera.cpp
     src/TrackballCamera.h
+    src/DisplayMode.h
 )
 
 # Nastran/.bdf import is compiled in only when VTK is available.

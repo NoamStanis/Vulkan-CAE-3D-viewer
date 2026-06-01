@@ -2,6 +2,7 @@
 
 #include "TrackballCamera.h"
 #include "Mesh.h"
+#include "DisplayMode.h"
 
 #include <QQuickItem>
 #include <QSGTexture>
@@ -24,6 +25,14 @@ class ViewerItem : public QQuickItem
     Q_OBJECT
     QML_ELEMENT
 
+    // Surface/edge display mode, exposed to QML as an int (0=Shaded,
+    // 1=ShadedEdges, 2=Wireframe — see DisplayMode).
+    Q_PROPERTY(int displayMode READ displayMode WRITE setDisplayMode
+                   NOTIFY displayModeChanged)
+
+    // Diffuse lighting on the surface (false = flat/unlit solid color).
+    Q_PROPERTY(bool lit READ lit WRITE setLit NOTIFY litChanged)
+
 public:
     explicit ViewerItem(QQuickItem *parent = nullptr);
     ~ViewerItem() override;
@@ -31,7 +40,24 @@ public:
     // Camera controls, called from QML input handlers on the main thread.
     // dx/dy are pixel deltas; they are normalised by the item size internally.
     Q_INVOKABLE void orbit(qreal dxPixels, qreal dyPixels);
+    Q_INVOKABLE void pan(qreal dxPixels, qreal dyPixels);
     Q_INVOKABLE void zoom(qreal steps);
+
+    int  displayMode() const { return static_cast<int>(m_displayMode); }
+    void setDisplayMode(int mode);
+
+    bool lit() const { return m_lit; }
+    void setLit(bool lit);
+
+    // Advance to the next display mode (for the keyboard shortcut).
+    Q_INVOKABLE void cycleDisplayMode();
+
+    // Re-frame the camera to fit the loaded model (Space shortcut / button).
+    Q_INVOKABLE void fitToModel();
+
+signals:
+    void displayModeChanged();
+    void litChanged();
 
 protected:
     // Called on the render thread when the scene graph is ready.
@@ -61,8 +87,18 @@ private:
     // render thread, inside updatePaintNode (main thread blocked there).
     TrackballCamera m_camera;
 
-    // Mesh + axis length are prepared on the main thread (file I/O, bounds) and
-    // handed to the renderer when the scene graph initialises.
+    // Mesh, edges, and axis length are prepared on the main thread (file I/O,
+    // bounds) and handed to the renderer when the scene graph initialises.
     MeshData m_mesh;
+    EdgeData m_edges;
     float    m_axisLength = 1.0f;
+
+    // Display mode + lighting set on the main thread; read by the render thread
+    // in updatePaintNode (main thread blocked there), like the camera matrix.
+    DisplayMode m_displayMode = DisplayMode::ShadedEdges;
+    bool        m_lit         = true;
+
+    // Model framing info, kept so fitToModel() can re-frame the camera.
+    QVector3D m_modelCenter;
+    float     m_modelRadius = 1.0f;
 };

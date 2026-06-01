@@ -80,6 +80,44 @@ Bounds MeshData::bounds() const
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+EdgeData makeTriangleEdges(const MeshData &mesh)
+{
+    EdgeData edges;
+    if (mesh.indices.size() < 3)
+        return edges;
+
+    // Collect unique undirected edges (min,max) so shared triangle edges aren't
+    // drawn twice.
+    std::unordered_map<uint64_t, std::pair<uint32_t, uint32_t>> unique;
+    auto addEdge = [&](uint32_t a, uint32_t b) {
+        const uint32_t lo = std::min(a, b);
+        const uint32_t hi = std::max(a, b);
+        const uint64_t key = (static_cast<uint64_t>(lo) << 32) | hi;
+        unique.emplace(key, std::make_pair(lo, hi));
+    };
+
+    for (size_t i = 0; i + 2 < mesh.indices.size(); i += 3) {
+        const uint32_t a = mesh.indices[i + 0];
+        const uint32_t b = mesh.indices[i + 1];
+        const uint32_t c = mesh.indices[i + 2];
+        addEdge(a, b);
+        addEdge(b, c);
+        addEdge(c, a);
+    }
+
+    edges.positions.reserve(unique.size() * 6);
+    for (const auto &kv : unique) {
+        for (uint32_t idx : {kv.second.first, kv.second.second}) {
+            const Vertex &v = mesh.vertices[idx];
+            edges.positions.push_back(v.position[0]);
+            edges.positions.push_back(v.position[1]);
+            edges.positions.push_back(v.position[2]);
+        }
+    }
+    return edges;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // loadObj
 //
 // Triangulates faces via tinyobjloader and de-duplicates (position, normal)

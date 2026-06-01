@@ -11,6 +11,9 @@
 #include <QDebug>
 #include <vulkan/vulkan.h>
 
+#include <algorithm>
+#include <cmath>
+
 #ifdef HAVE_VTK
 #include "io/NastranReader.h"
 #include "io/VtkSurface.h"
@@ -18,10 +21,12 @@
 
 namespace {
 
-// Load a model file into MeshData by extension. Nastran .bdf is supported only
-// when the app was compiled with VTK (HAVE_VTK). Throws on failure; the caller
-// decides the fallback.
-MeshData loadModelFile(const QString &path)
+// Load a model file by extension, filling both the shaded surface (`mesh`) and
+// the element-edge overlay (`edges`). Nastran .bdf is supported only when the
+// app was compiled with VTK (HAVE_VTK). For .bdf, edges are the true element-face
+// edges from VTK; for OBJ they are the de-duplicated triangle edges. Throws on
+// failure; the caller decides the fallback.
+void loadModelFile(const QString &path, MeshData &mesh, EdgeData &edges)
 {
     const QString suffix = QFileInfo(path).suffix().toLower();
     const std::string p = path.toStdString();
@@ -29,14 +34,17 @@ MeshData loadModelFile(const QString &path)
     if (suffix == "bdf" || suffix == "nas" || suffix == "dat") {
 #ifdef HAVE_VTK
         auto grid = NastranReader::read(p);
-        return VtkSurface::toMeshData(grid);
+        mesh  = VtkSurface::toMeshData(grid);
+        edges = VtkSurface::extractEdges(grid);
+        return;
 #else
         throw std::runtime_error(
             "Nastran .bdf requires a VTK-enabled build (set VTK_DIR and rebuild)");
 #endif
     }
-    // Default: Wavefront OBJ.
-    return loadObj(p);
+    // Default: Wavefront OBJ. Edges are derived from the triangle mesh.
+    mesh  = loadObj(p);
+    edges = makeTriangleEdges(mesh);
 }
 
 } // namespace
@@ -65,24 +73,35 @@ ViewerItem::ViewerItem(QQuickItem *parent)
     const QString defaultModel = QStringLiteral(ASSET_DIR "satellite.obj");
 #endif
     try {
-        m_mesh = loadModelFile(defaultModel);
+        loadModelFile(defaultModel, m_mesh, m_edges);
         qInfo() << "ViewerItem: loaded model" << defaultModel
                 << "(" << static_cast<int>(m_mesh.vertices.size()) << "verts,"
-                << static_cast<int>(m_mesh.indices.size() / 3) << "tris )";
+                << static_cast<int>(m_mesh.indices.size() / 3) << "tris,"
+                << static_cast<int>(m_edges.vertexCount() / 2) << "edges )";
     } catch (const std::exception &e) {
         qWarning() << "ViewerItem: model load failed (" << e.what()
                    << ") — using fallback cube";
-        m_mesh = makeCube();
+        m_mesh  = makeCube();
+        m_edges = makeTriangleEdges(m_mesh);
     }
 
     // Frame the camera to the loaded mesh's bounds so it fits on load, and size
-    // the axis gizmo to roughly the model's extent.
+    // the axis gizmo so it always extends past the model.
     const Bounds b = m_mesh.bounds();
     float c[3];
     b.center(c);
-    const float radius = b.radius();
-    m_camera.frame(QVector3D(c[0], c[1], c[2]), radius > 0.0f ? radius : 1.0f);
-    m_axisLength = (radius > 0.0f ? radius : 1.0f) * 1.25f;
+    m_modelCenter = QVector3D(c[0], c[1], c[2]);
+    m_modelRadius = b.radius() > 0.0f ? b.radius() : 1.0f;
+    m_camera.frame(m_modelCenter, m_modelRadius);
+
+    // Axes emanate from the origin, so size them to clear the model's farthest
+    // extent from the origin (not just its center), then add margin so the tips
+    // always poke out beyond the geometry regardless of the model's placement.
+    float maxFromOrigin = 0.0f;
+    for (int i = 0; i < 3; ++i)
+        maxFromOrigin = std::max(maxFromOrigin,
+                                 std::max(std::abs(b.min[i]), std::abs(b.max[i])));
+    m_axisLength = (maxFromOrigin > 0.0f ? maxFromOrigin : m_modelRadius) * 1.5f;
 
     // These signals are emitted on the render thread, so use DirectConnection.
     connect(this, &QQuickItem::windowChanged, this, [this](QQuickWindow *w) {
@@ -142,7 +161,9 @@ void ViewerItem::handleSceneGraphInitialized()
         m_renderer = std::make_unique<VulkanRenderer>(
             *vkInstance, *vkPhysDevice, *vkDevice,
             static_cast<uint32_t>(*queueFamilyIdx), *vkQueue);
-        m_renderer->init(pixelSize, m_mesh, m_axisLength);
+        m_renderer->init(pixelSize, m_mesh, m_edges, m_axisLength);
+        m_renderer->setDisplayMode(m_displayMode);
+        m_renderer->setLit(m_lit);
     } catch (const std::exception &e) {
         qWarning() << "ViewerItem: renderer init FAILED:" << e.what();
         m_renderer.reset();
@@ -178,6 +199,8 @@ QSGNode *ViewerItem::updatePaintNode(QSGNode *oldNode, UpdatePaintNodeData *)
         ? static_cast<float>(sz.width()) / static_cast<float>(sz.height())
         : 1.0f;
     m_renderer->setMvp(m_camera.viewProjection(aspect));
+    m_renderer->setDisplayMode(m_displayMode);
+    m_renderer->setLit(m_lit);
 
     // Render our Vulkan scene into the offscreen VkImage.
     try {
@@ -261,8 +284,53 @@ void ViewerItem::orbit(qreal dxPixels, qreal dyPixels)
     update();
 }
 
+void ViewerItem::pan(qreal dxPixels, qreal dyPixels)
+{
+    const qreal w = width()  > 0 ? width()  : 1.0;
+    const qreal h = height() > 0 ? height() : 1.0;
+    m_camera.pan(static_cast<float>(dxPixels / w),
+                 static_cast<float>(dyPixels / h));
+    update();
+}
+
 void ViewerItem::zoom(qreal steps)
 {
     m_camera.zoom(static_cast<float>(steps));
+    update();
+}
+
+void ViewerItem::setDisplayMode(int mode)
+{
+    if (mode < 0 || mode >= static_cast<int>(DisplayMode::Count))
+        return;
+    const auto m = static_cast<DisplayMode>(mode);
+    if (m == m_displayMode)
+        return;
+    m_displayMode = m;
+    emit displayModeChanged();
+    update();  // re-render with the new mode (picked up in updatePaintNode)
+}
+
+void ViewerItem::cycleDisplayMode()
+{
+    const int next = (static_cast<int>(m_displayMode) + 1)
+                     % static_cast<int>(DisplayMode::Count);
+    setDisplayMode(next);
+}
+
+void ViewerItem::setLit(bool lit)
+{
+    if (lit == m_lit)
+        return;
+    m_lit = lit;
+    emit litChanged();
+    update();
+}
+
+void ViewerItem::fitToModel()
+{
+    // Re-center and re-zoom to the model, but keep the current rotation so "fit"
+    // doesn't snap the view back to the default orientation.
+    m_camera.frame(m_modelCenter, m_modelRadius, /*resetOrientation=*/false);
     update();
 }

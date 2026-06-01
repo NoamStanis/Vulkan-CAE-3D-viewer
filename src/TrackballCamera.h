@@ -19,7 +19,10 @@ class TrackballCamera
 {
 public:
     // Frame the camera around a target and bounding radius so the object fits.
-    void frame(const QVector3D &target, float boundingRadius);
+    // `resetOrientation` true snaps to the default view (used on load); false
+    // keeps the current rotation and only re-centers/re-zooms (used by "fit").
+    void frame(const QVector3D &target, float boundingRadius,
+               bool resetOrientation = true);
 
     // Drag-rotate. dx/dy are pixel deltas normalised by the viewport size, so a
     // full-width drag maps to a fixed angular sweep regardless of resolution.
@@ -27,6 +30,11 @@ public:
 
     // Wheel/pinch zoom. Positive `delta` zooms in (decreases distance).
     void zoom(float delta);
+
+    // Drag-pan: shift the target in the camera's view plane. dx/dy are pixel
+    // deltas normalised by the viewport size; the shift is scaled by distance so
+    // panning feels consistent at any zoom level.
+    void pan(float dxNorm, float dyNorm);
 
     // Combined model-view-projection for the given viewport aspect ratio.
     // Includes the OpenGL→Vulkan clip-space correction (Y flip, [0,1] depth).
