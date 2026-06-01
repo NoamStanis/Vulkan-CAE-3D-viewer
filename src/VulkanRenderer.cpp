@@ -108,6 +108,30 @@ void VulkanRenderer::init(const QSize &size, const MeshData &mesh,
     createEdgesBuffer(edges);
 }
 
+void VulkanRenderer::setGeometry(const MeshData &mesh, const EdgeData &edges,
+                                 float axisLength)
+{
+    // The GPU may still be referencing the current buffers; wait before freeing.
+    vkDeviceWaitIdle(m_device);
+
+    // Destroy existing geometry buffers (mesh, index, edges, axes). Pipelines,
+    // descriptors, render pass, and the uniform buffer are geometry-independent
+    // and stay as-is.
+    auto destroyBuffer = [this](VkBuffer &buf, VkDeviceMemory &mem) {
+        if (buf != VK_NULL_HANDLE) { vkDestroyBuffer(m_device, buf, nullptr); buf = VK_NULL_HANDLE; }
+        if (mem != VK_NULL_HANDLE) { vkFreeMemory(m_device, mem, nullptr);    mem = VK_NULL_HANDLE; }
+    };
+    destroyBuffer(m_indexBuffer,  m_indexBufferMemory);
+    destroyBuffer(m_vertexBuffer, m_vertexBufferMemory);
+    destroyBuffer(m_edgesBuffer,  m_edgesBufferMemory);
+    destroyBuffer(m_axesBuffer,   m_axesBufferMemory);
+    m_indexCount = m_edgesVertexCount = m_axesVertexCount = 0;
+
+    createMeshBuffers(mesh);
+    createAxesBuffer(axisLength > 0.0f ? axisLength : 1.0f);
+    createEdgesBuffer(edges);
+}
+
 void VulkanRenderer::resize(const QSize &size)
 {
     if (m_size == size)

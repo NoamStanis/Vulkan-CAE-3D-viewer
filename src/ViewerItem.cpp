@@ -68,7 +68,7 @@ ViewerItem::ViewerItem(QQuickItem *parent)
     // Default model: prefer a Nastran .bdf when the build has VTK, otherwise the
     // bundled OBJ. (A future revision exposes this as a `source` QML property.)
 #ifdef HAVE_VTK
-    const QString defaultModel = QStringLiteral(ASSET_DIR "model.bdf");
+    const QString defaultModel = QStringLiteral(ASSET_DIR "plane.bdf");
 #else
     const QString defaultModel = QStringLiteral(ASSET_DIR "satellite.obj");
 #endif

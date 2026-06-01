@@ -49,6 +49,12 @@ public:
     void resize(const QSize &size);
     void render();
 
+    // Replace the rendered geometry on a live renderer (e.g. after File → Open).
+    // Waits for the GPU to idle, then re-uploads mesh/edge/axis buffers. The
+    // pipelines, descriptors, and uniform buffer are geometry-independent and
+    // are left intact. Render-thread call.
+    void setGeometry(const MeshData &mesh, const EdgeData &edges, float axisLength);
+
     // Set the model-view-projection matrix used for the next render().
     // Called on the render thread (from updatePaintNode) before render().
     void setMvp(const QMatrix4x4 &mvp) { m_mvp = mvp; }

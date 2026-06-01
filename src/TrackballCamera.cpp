@@ -8,10 +8,14 @@ void TrackballCamera::frame(const QVector3D &target, float boundingRadius,
 {
     m_target = target;
 
-    // Distance so the bounding sphere fits within the vertical FOV, with margin.
+    // Distance so the bounding sphere just fits the vertical FOV. `fit` already
+    // makes the sphere exactly fill the view; a small factor adds slight margin
+    // so the model sits tight to the frame without clipping the edges. Framing
+    // on the bounding sphere (not the projected extent) keeps the whole model
+    // visible in any orientation, which matters since the camera orbits freely.
     const float fovRad = qDegreesToRadians(k_fovY);
     const float fit    = boundingRadius / std::sin(fovRad * 0.5f);
-    m_distance    = fit * 1.3f;
+    m_distance    = fit * 1.05f;
     m_minDistance = std::max(0.01f, boundingRadius * 0.05f);
     m_maxDistance = fit * 20.0f;
     if (resetOrientation)

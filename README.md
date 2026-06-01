@@ -26,9 +26,10 @@ differences live in `conanfile.py` and the run-time environment.
 - Vulkan-rendered viewport composited into QML (offscreen `VkImage` →
   `QSGTexture`), validated threading model (render thread vs. main thread).
 - Indexed mesh rendering with a depth buffer and per-vertex lit shading.
-- Trackball camera: **drag** to orbit (or pan — toggle via the on-screen
-  **Drag: Rotate/Pan** button), **scroll** to zoom; **`Space`** re-fits the
-  camera to the model.
+- Trackball camera: **left-drag** to orbit, **right-drag** to pan (right always
+  does the opposite of the configured left-drag mode); the **Drag: Rotate/Pan**
+  button or **`R`** / **`P`** keys set what left-drag does. **scroll** to zoom;
+  **`Space`** re-fits the camera tightly to the model.
 - XYZ axis gizmo (red/green/blue), sized to extend past the model.
 - **Element-edge display** with three modes — shaded, shaded + edges, and
   wireframe — toggled with the **`E`** key or the on-screen selector. For Nastran
@@ -39,7 +40,7 @@ differences live in `conanfile.py` and the run-time environment.
   hand-written reader (`src/io/NastranReader.*`) parses GRID + CHEXA/CTETRA/
   CPENTA/CTRIA3/CQUAD4 into a `vtkUnstructuredGrid`; `src/io/VtkSurface.*`
   extracts the free surface and converts it to renderable geometry. The app
-  loads `assets/model.bdf` by default and renders the FE surface. VTK is used
+  loads `assets/plane.bdf` by default and renders the FE surface. VTK is used
   **headlessly** (data/filter only); the Vulkan pipeline remains the renderer.
 
 **In progress — vibroacoustics results:**
@@ -186,9 +187,10 @@ build\Release\VulkanCAEViewerApp.exe
 You should see a 1280×720 window showing a 3D model (with element edges overlaid
 by default) on a light blue-white background, red/green/blue XYZ axis lines, and
 a QML overlay bar across the top. **Drag** to orbit; **scroll** to zoom; press
-**`E`** to cycle shaded → shaded + edges → wireframe; press **`Space`** to re-fit
-the model. The overlay buttons mirror the display modes and add toggles for
-**Drag: Rotate/Pan** and **Shading: On/Off**.
+**`R`** / **`P`** to set drag to rotate / pan; **`E`** to cycle shaded → shaded +
+edges → wireframe; **`Space`** to re-fit the model. The overlay buttons mirror
+the display modes and add toggles for **Drag: Rotate/Pan** and **Shading:
+On/Off**.
 
 > **macOS:** if the app exits immediately with a Vulkan instance creation
 > error, the ICD env var (`VK_ICD_FILENAMES` / `VK_DRIVER_FILES`) was not set —

@@ -7,7 +7,7 @@ Window {
     width:  1280
     height: 720
     visible: true
-    title: "Vulkan CAE Viewer — drag rotate · scroll zoom · E edges · Space fit"
+    title: "Vulkan CAE Viewer — drag · scroll zoom · R/P rotate/pan · E edges · Space fit"
     color: "#141416"
 
     // Mode-button labels reflect the lighting state: with shading off the
@@ -26,6 +26,16 @@ Window {
         onActivated: viewer.cycleDisplayMode()
     }
 
+    // R / P: set left-drag to rotate or pan (mirrors the on-screen toggle).
+    Shortcut {
+        sequence: "R"
+        onActivated: root.panMode = false
+    }
+    Shortcut {
+        sequence: "P"
+        onActivated: root.panMode = true
+    }
+
     // Space: fit the camera to the model.
     Shortcut {
         sequence: "Space"
@@ -37,22 +47,30 @@ Window {
         id: viewer
         anchors.fill: parent
 
-        // Left-drag orbits or pans depending on root.panMode; scroll zooms.
+        // Left-drag uses the configured mode (root.panMode); right-drag does the
+        // opposite. So with the default (rotate): left = rotate, right = pan; if
+        // panMode is set to pan, left = pan, right = rotate. Scroll zooms.
         // Handling the wheel inside the MouseArea avoids a separate pointer
         // handler competing with it for the same events.
         MouseArea {
             id: dragArea
             anchors.fill: parent
-            acceptedButtons: Qt.LeftButton
+            acceptedButtons: Qt.LeftButton | Qt.RightButton
             property real lastX: 0
             property real lastY: 0
+            // Which button started the current drag (set on press).
+            property int dragButton: Qt.NoButton
 
             onPressed: (mouse) => {
+                dragButton = mouse.button;
                 lastX = mouse.x;
                 lastY = mouse.y;
             }
             onPositionChanged: (mouse) => {
-                if (root.panMode)
+                // Right button inverts the configured mode.
+                var pan = (dragButton === Qt.RightButton) ? !root.panMode
+                                                           : root.panMode;
+                if (pan)
                     viewer.pan(mouse.x - lastX, mouse.y - lastY);
                 else
                     viewer.orbit(mouse.x - lastX, mouse.y - lastY);

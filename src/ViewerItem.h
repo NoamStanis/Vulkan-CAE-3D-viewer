@@ -55,9 +55,15 @@ public:
     // Re-frame the camera to fit the loaded model (Space shortcut / button).
     Q_INVOKABLE void fitToModel();
 
+    // Open a model file at runtime (File → Open). Accepts a file:// URL or a
+    // plain path. Loads on the main thread; the new geometry is handed to the
+    // renderer at the next frame. Emits loadError(message) on failure.
+    Q_INVOKABLE void openFile(const QUrl &url);
+
 signals:
     void displayModeChanged();
     void litChanged();
+    void loadError(const QString &message);
 
 protected:
     // Called on the render thread when the scene graph is ready.
